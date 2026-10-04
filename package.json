@@ -1,0 +1,6 @@
+{
+  "name": "part-two-finder",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" }
+}
