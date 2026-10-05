@@ -28,6 +28,10 @@ export async function GET(request) {
     call("bd basic", `${G}/${IG_BUSINESS_ID}?fields=${q(`business_discovery.username(${u}){id,username,followers_count,media_count}`)}&${t}`),
     call("bd media", `${G}/${IG_BUSINESS_ID}?fields=${q(`business_discovery.username(${u}){media.limit(3){id,caption,timestamp,permalink,media_type}}`)}&${t}`),
     call("ig-login token bd", `https://graph.instagram.com/v23.0/me?fields=${q(`business_discovery.username(${u}){id,username}`)}&access_token=${IG_TOKEN}`),
+    ...(p.get("ut") ? [
+      call("bd with user token", `${G}/${IG_BUSINESS_ID}?fields=${q(`business_discovery.username(${u}){id,username,followers_count}`)}&access_token=${p.get("ut")}`),
+      call("user token perms", `${G}/me/permissions?access_token=${p.get("ut")}`),
+    ] : []),
   ]);
   return Response.json({ hasPageToken: !!FB_PAGE_TOKEN, igBusinessId: IG_BUSINESS_ID, results });
 }
