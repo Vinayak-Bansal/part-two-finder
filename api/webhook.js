@@ -39,7 +39,7 @@ export async function POST(request) {
         const info = await getCreator(reel.payload.url); // { username, postedAt }
         console.log("Creator:", JSON.stringify(info));
         if (!info?.username) {
-          reply = "Couldn't tell who posted this reel 😕 try again in a bit.";
+          reply = "Couldn't tell who posted this reel  try again in a bit.";
         } else {
           const p2 = await findPartTwo(reel.payload, info, () => sendText(senderId, "🔎 Looking for part 2..."));
           reply = p2
