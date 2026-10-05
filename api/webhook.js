@@ -35,8 +35,12 @@ export async function POST(request) {
       let reply;
       if (reel) {
         console.log("Reel received:", JSON.stringify(reel.payload));
-        const partTwo = await findPartTwo(reel.payload);
-        reply = partTwo ? `Here's part 2: ${partTwo}` : "Couldn't find part 2 for this one yet 👀";
+        const creator = await getCreator(reel.payload.url);
+        console.log("Creator:", creator);
+        const partTwo = await findPartTwo(reel.payload, creator);
+        reply = partTwo
+          ? `Here's part 2: ${partTwo}`
+          : `Creator: ${creator ? "@" + creator : "unknown"}. Part 2 search coming soon 👀`;
       } else {
         reply = "Send me a reel and I'll find part 2.";
       }
@@ -48,7 +52,57 @@ export async function POST(request) {
 
 // TODO: the real part-two lookup goes here.
 // payload usually has { reel_video_id, title, url }.
-async function findPartTwo(payload) {
+async function findPartTwo(payload, creator) {
+  return null;
+}
+
+const UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
+
+// Find the creator's username from the reel's public pages (free, no API)
+async function getCreator(url) {
+  const code = url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
+  if (!code) return null;
+
+  const tries = [
+    // 1. Public embed page (what websites use to embed posts; no login wall)
+    {
+      name: "embed",
+      url: `https://www.instagram.com/reel/${code}/embed/captioned/`,
+      patterns: [
+        /class="UsernameText"[^>]*>([A-Za-z0-9._]+)</,
+        /"username":"([A-Za-z0-9._]+)"/,
+        /instagram\.com\/([A-Za-z0-9._]+)\/?\?utm_source=ig_embed/,
+      ],
+    },
+    // 2. Normal reel page metadata (og tags)
+    {
+      name: "page",
+      url: `https://www.instagram.com/reel/${code}/`,
+      patterns: [
+        /\(@([A-Za-z0-9._]+)\)/,
+        /- ([A-Za-z0-9._]+) on [A-Z][a-z]+ \d/,
+        /"username":"([A-Za-z0-9._]+)"/,
+      ],
+    },
+  ];
+
+  for (const t of tries) {
+    try {
+      const res = await fetch(t.url, { headers: { "User-Agent": UA, "Accept-Language": "en-US" } });
+      const html = await res.text();
+      for (const p of t.patterns) {
+        const m = html.match(p);
+        if (m && m[1] !== "whereispart2") {
+          console.log(`Creator found via ${t.name}`);
+          return m[1];
+        }
+      }
+      console.log(`No creator via ${t.name} (status ${res.status}, ${html.length} bytes)`);
+    } catch (e) {
+      console.log(`Fetch ${t.name} failed:`, e.message);
+    }
+  }
   return null;
 }
 
