@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 const GRAPH = "https://graph.instagram.com/v23.0";
 const { VERIFY_TOKEN, IG_TOKEN, APP_SECRET, GEMINI_API_KEY } = process.env;
+const { FB_PAGE_TOKEN, IG_BUSINESS_ID } = process.env;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 
 // Meta calls this once when you click "Verify and save"
@@ -39,7 +40,7 @@ export async function POST(request) {
         const info = await getCreator(reel.payload.url); // { username, postedAt }
         console.log("Creator:", JSON.stringify(info));
         if (!info?.username) {
-          reply = "Couldn't tell who posted this reel  try again in a bit.";
+          reply = "Couldn't tell who posted this reel 😕 try again in a bit.";
         } else {
           const p2 = await findPartTwo(reel.payload, info, () => sendText(senderId, "🔎 Looking for part 2..."));
           reply = p2
@@ -57,8 +58,63 @@ export async function POST(request) {
 
 // ---------- Part 2 finder ----------
 
-// Get a creator's most recent posts (public web endpoint, no login; returns ~12 latest)
-async function getRecentPosts(username) {
+// Get a creator's posts, newest first. Uses Meta's official Business Discovery API when set up,
+// otherwise the public web endpoint (often blocked from servers).
+async function getRecentPosts(username, sinceMs) {
+  if (FB_PAGE_TOKEN && IG_BUSINESS_ID) {
+    const posts = await businessDiscovery(username, sinceMs);
+    if (posts) return posts;
+  }
+  return webProfilePosts(username);
+}
+
+const BD_FIELDS_FULL = "id,caption,timestamp,permalink,media_type,media_product_type,thumbnail_url,media_url";
+const BD_FIELDS_MIN = "id,caption,timestamp,permalink,media_type,media_url";
+
+async function businessDiscovery(username, sinceMs) {
+  const all = [];
+  let after = null;
+  let fields = BD_FIELDS_FULL;
+  // Page back until we pass the original reel's date (max 4 pages × 50 posts)
+  for (let page = 0; page < 4; page++) {
+    const media = `media${after ? `.after(${after})` : ""}.limit(50){${fields}}`;
+    const url =
+      `https://graph.facebook.com/v23.0/${IG_BUSINESS_ID}` +
+      `?fields=${encodeURIComponent(`business_discovery.username(${username}){${media}}`)}` +
+      `&access_token=${FB_PAGE_TOKEN}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.error) {
+      // Retry once with fewer fields in case some aren't allowed
+      if (fields === BD_FIELDS_FULL && data.error.code === 100) {
+        console.log("Business Discovery: retrying with fewer fields:", data.error.message);
+        fields = BD_FIELDS_MIN;
+        page--;
+        continue;
+      }
+      console.log("Business Discovery failed:", JSON.stringify(data.error).slice(0, 300));
+      return all.length ? all : null;
+    }
+    const m = data.business_discovery?.media;
+    for (const item of m?.data || []) {
+      all.push({
+        shortcode: item.permalink?.match(/\/(?:reel|p|tv)\/([A-Za-z0-9_-]+)/)?.[1] || item.id,
+        takenAt: Date.parse(item.timestamp),
+        caption: item.caption || "",
+        isVideo: item.media_type === "VIDEO",
+        thumb: item.thumbnail_url || (item.media_type === "IMAGE" ? item.media_url : null),
+      });
+    }
+    after = m?.paging?.cursors?.after;
+    const oldest = all[all.length - 1]?.takenAt;
+    if (!after || !sinceMs || (oldest && oldest < sinceMs)) break;
+  }
+  console.log(`Business Discovery: ${all.length} posts for @${username}`);
+  return all.sort((a, b) => a.takenAt - b.takenAt); // oldest → newest
+}
+
+// Public web endpoint (no login; ~12 latest). Instagram often blocks this from servers.
+async function webProfilePosts(username) {
   const res = await fetch(
     `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
     { headers: { "User-Agent": BROWSER_UA, "x-ig-app-id": "936619743392459", "Accept-Language": "en-US,en" } }
@@ -86,7 +142,7 @@ async function getRecentPosts(username) {
     });
   }
   console.log(`Got ${posts.length} posts for @${username}`);
-  return posts.sort((a, b) => a.takenAt - b.takenAt); // oldest → newest
+  return posts.sort((a, b) => a.takenAt - b.takenAt);
 }
 
 // Detect "part 3", "pt.3", "p3", "3/5" → 3
@@ -112,7 +168,7 @@ function similarity(a, b) {
 async function findPartTwo(payload, info, onSlow) {
   const code = payload.url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
   const caption = payload.title || "";
-  const posts = await getRecentPosts(info.username);
+  const posts = await getRecentPosts(info.username, info.postedAt);
   if (!posts.length) return null;
 
   // When was the original posted? Use the list if it's there, else the date from the page.
