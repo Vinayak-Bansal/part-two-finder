@@ -56,8 +56,26 @@ async function findPartTwo(payload, creator) {
   return null;
 }
 
-const UA =
+const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
+// Link-preview bots get simple pages with og: tags (that's how iMessage shows "username on Instagram")
+const BOT_UAS = ["facebookexternalhit/1.1", "Twitterbot/1.0", "Slackbot-LinkExpanding 1.0"];
+
+const U = "([A-Za-z0-9._]{1,30})";
+const PATTERNS = [
+  // og:description: "123 likes, 4 comments - username on October 1, 2026: ..."
+  new RegExp(`comments? - ${U} on [A-Z][a-z]+ \\d`),
+  new RegExp(`likes?, \\d[\\d,.KM]* comments? - ${U}`),
+  // og:title / title: "Name (@username) • Instagram" or "@username on Instagram"
+  new RegExp(`\\(@${U}\\)`),
+  new RegExp(`@${U} on Instagram`),
+  // embed page
+  new RegExp(`class="UsernameText"[^>]*>${U}<`),
+  new RegExp(`instagram\\.com/${U}/?\\?utm_source=ig_embed`),
+  // JSON blobs (plain or escaped): owner first, then any username
+  new RegExp(`\\\\?"owner\\\\?":\\{[^}]*?\\\\?"username\\\\?":\\\\?"${U}`),
+  new RegExp(`\\\\?"username\\\\?":\\\\?"${U}\\\\?"`),
+];
 
 // Find the creator's username from the reel's public pages (free, no API)
 async function getCreator(url) {
@@ -65,40 +83,31 @@ async function getCreator(url) {
   if (!code) return null;
 
   const tries = [
-    // 1. Public embed page (what websites use to embed posts; no login wall)
-    {
-      name: "embed",
-      url: `https://www.instagram.com/reel/${code}/embed/captioned/`,
-      patterns: [
-        /class="UsernameText"[^>]*>([A-Za-z0-9._]+)</,
-        /"username":"([A-Za-z0-9._]+)"/,
-        /instagram\.com\/([A-Za-z0-9._]+)\/?\?utm_source=ig_embed/,
-      ],
-    },
-    // 2. Normal reel page metadata (og tags)
-    {
-      name: "page",
-      url: `https://www.instagram.com/reel/${code}/`,
-      patterns: [
-        /\(@([A-Za-z0-9._]+)\)/,
-        /- ([A-Za-z0-9._]+) on [A-Z][a-z]+ \d/,
-        /"username":"([A-Za-z0-9._]+)"/,
-      ],
-    },
+    ...BOT_UAS.map(ua => ({ name: `page/${ua.split("/")[0]}`, url: `https://www.instagram.com/reel/${code}/`, ua })),
+    { name: "embed", url: `https://www.instagram.com/reel/${code}/embed/captioned/`, ua: BROWSER_UA },
+    { name: "page/browser", url: `https://www.instagram.com/reel/${code}/`, ua: BROWSER_UA },
   ];
 
   for (const t of tries) {
     try {
-      const res = await fetch(t.url, { headers: { "User-Agent": UA, "Accept-Language": "en-US" } });
+      const res = await fetch(t.url, { headers: { "User-Agent": t.ua, "Accept-Language": "en-US,en" } });
       const html = await res.text();
-      for (const p of t.patterns) {
+      for (const p of PATTERNS) {
         const m = html.match(p);
-        if (m && m[1] !== "whereispart2") {
-          console.log(`Creator found via ${t.name}`);
+        if (m && !["whereispart2", "instagram"].includes(m[1].toLowerCase())) {
+          console.log(`Creator found via ${t.name} (pattern ${p.source.slice(0, 30)})`);
           return m[1];
         }
       }
-      console.log(`No creator via ${t.name} (status ${res.status}, ${html.length} bytes)`);
+      // Debug: show what the page actually contains so we can adjust
+      const title = html.match(/<title[^>]*>([\s\S]{0,200}?)<\/title>/i)?.[1];
+      const og = [...html.matchAll(/<meta[^>]+property="og:(title|description)"[^>]+content="([^"]{0,200})/g)]
+        .map(m => `${m[1]}=${m[2]}`);
+      const userCtx = [...html.matchAll(/username/g)].slice(0, 3)
+        .map(m => html.slice(Math.max(0, m.index - 60), m.index + 80));
+      console.log(`No creator via ${t.name}`, JSON.stringify({
+        status: res.status, finalUrl: res.url, bytes: html.length, title, og, userCtx,
+      }));
     } catch (e) {
       console.log(`Fetch ${t.name} failed:`, e.message);
     }
