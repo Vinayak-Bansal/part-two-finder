@@ -21,6 +21,7 @@ export async function GET(request) {
   const q = s => encodeURIComponent(s);
 
   const results = await Promise.all([
+    call("token scopes", `${G}/debug_token?input_token=${FB_PAGE_TOKEN}&${t}`),
     call("page me", `${G}/me?fields=id,name&${t}`),
     call("ig account", `${G}/${IG_BUSINESS_ID}?fields=id,username&${t}`),
     call("page's ig link", `${G}/me?fields=instagram_business_account&${t}`),
