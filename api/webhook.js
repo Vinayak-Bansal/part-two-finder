@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 
 const GRAPH = "https://graph.instagram.com/v23.0";
-const { VERIFY_TOKEN, IG_TOKEN, APP_SECRET } = process.env;
+const { VERIFY_TOKEN, IG_TOKEN, APP_SECRET, GEMINI_API_KEY } = process.env;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 
 // Meta calls this once when you click "Verify and save"
 export function GET(request) {
@@ -35,12 +36,16 @@ export async function POST(request) {
       let reply;
       if (reel) {
         console.log("Reel received:", JSON.stringify(reel.payload));
-        const creator = await getCreator(reel.payload.url);
-        console.log("Creator:", creator);
-        const partTwo = await findPartTwo(reel.payload, creator);
-        reply = partTwo
-          ? `Here's part 2: ${partTwo}`
-          : `Creator: ${creator ? "@" + creator : "unknown"}. Part 2 search coming soon`;
+        const info = await getCreator(reel.payload.url); // { username, postedAt }
+        console.log("Creator:", JSON.stringify(info));
+        if (!info?.username) {
+          reply = "Couldn't tell who posted this reel 😕 try again in a bit.";
+        } else {
+          const p2 = await findPartTwo(reel.payload, info, () => sendText(senderId, "🔎 Looking for part 2..."));
+          reply = p2
+            ? `Here's part 2 👉 https://www.instagram.com/reel/${p2.shortcode}/`
+            : `Couldn't find part 2 yet 👀 Check @${info.username}'s page, it might not be out yet.`;
+        }
       } else {
         reply = "Send me a reel and I'll find part 2.";
       }
@@ -50,10 +55,157 @@ export async function POST(request) {
   return new Response("EVENT_RECEIVED", { status: 200 });
 }
 
-// TODO: the real part-two lookup goes here.
-// payload usually has { reel_video_id, title, url }.
-async function findPartTwo(payload, creator) {
-  return null;
+// ---------- Part 2 finder ----------
+
+// Get a creator's most recent posts (public web endpoint, no login; returns ~12 latest)
+async function getRecentPosts(username) {
+  const res = await fetch(
+    `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
+    { headers: { "User-Agent": BROWSER_UA, "x-ig-app-id": "936619743392459", "Accept-Language": "en-US,en" } }
+  );
+  if (!res.ok) {
+    console.log("Profile fetch failed:", res.status, (await res.text()).slice(0, 200));
+    return [];
+  }
+  const user = (await res.json())?.data?.user;
+  const edges = [
+    ...(user?.edge_owner_to_timeline_media?.edges || []),
+    ...(user?.edge_felix_video_timeline?.edges || []),
+  ];
+  const seen = new Set();
+  const posts = [];
+  for (const { node } of edges) {
+    if (!node?.shortcode || seen.has(node.shortcode)) continue;
+    seen.add(node.shortcode);
+    posts.push({
+      shortcode: node.shortcode,
+      takenAt: node.taken_at_timestamp * 1000,
+      caption: node.edge_media_to_caption?.edges?.[0]?.node?.text || "",
+      isVideo: !!node.is_video,
+      thumb: node.thumbnail_src || node.display_url || null,
+    });
+  }
+  console.log(`Got ${posts.length} posts for @${username}`);
+  return posts.sort((a, b) => a.takenAt - b.takenAt); // oldest → newest
+}
+
+// Detect "part 3", "pt.3", "p3", "3/5" → 3
+const NUM_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+function partNumber(text) {
+  const m = text.match(/\b(?:part|pt)\.?\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\b|\bp(\d{1,2})\b|\b(\d{1,2})\/\d{1,2}\b/i);
+  if (!m) return null;
+  const v = (m[1] || m[2] || m[3]).toLowerCase();
+  return NUM_WORDS[v] ?? parseInt(v, 10);
+}
+
+function words(text) {
+  return new Set((text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) || []).filter(w => !w.startsWith("http")));
+}
+function similarity(a, b) {
+  const A = words(a), B = words(b);
+  if (!A.size || !B.size) return 0;
+  let hit = 0;
+  for (const w of A) if (B.has(w)) hit++;
+  return hit / Math.min(A.size, B.size);
+}
+
+async function findPartTwo(payload, info, onSlow) {
+  const code = payload.url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
+  const caption = payload.title || "";
+  const posts = await getRecentPosts(info.username);
+  if (!posts.length) return null;
+
+  // When was the original posted? Use the list if it's there, else the date from the page.
+  const original = posts.find(p => p.shortcode === code);
+  const after = original?.takenAt ?? info.postedAt ?? 0;
+  const candidates = posts.filter(p => p.shortcode !== code && p.takenAt > after);
+  if (!candidates.length) return null;
+
+  // If the reel you sent is part N, look for part N+1 (default: part 1 → find part 2)
+  const sentPart = partNumber(caption);
+  const want = (sentPart || 1) + 1;
+
+  // 1) Fast path: caption clearly says the next part and matches the series → no AI needed
+  let best = null;
+  for (const p of candidates) {
+    const sim = similarity(caption, p.caption);
+    const n = partNumber(p.caption);
+    const clear = n === want && (sim >= 0.2 || sentPart);
+    console.log(`Candidate ${p.shortcode} part=${n} sim=${sim.toFixed(2)} clear=${clear} "${p.caption.slice(0, 50)}"`);
+    if (clear && (!best || p.takenAt < best.takenAt)) best = p; // earliest matching
+  }
+  if (best) {
+    console.log("Matched by caption:", best.shortcode);
+    return best;
+  }
+
+  // 2) AI path: let Gemini look at the covers + captions
+  if (!GEMINI_API_KEY) return null;
+  await onSlow?.();
+  const pick = await askGemini({ caption, thumb: original?.thumb || info.thumb }, candidates.slice(0, 10), want);
+  return pick;
+}
+
+// Download an image and return it base64-encoded for Gemini
+async function imagePart(url) {
+  if (!url) return null;
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": BROWSER_UA } });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return { inline_data: { mime_type: res.headers.get("content-type")?.split(";")[0] || "image/jpeg", data: buf.toString("base64") } };
+  } catch {
+    return null;
+  }
+}
+
+async function askGemini(sent, candidates, want) {
+  const [sentImg, ...candImgs] = await Promise.all([sent.thumb, ...candidates.map(c => c.thumb)].map(imagePart));
+
+  const parts = [
+    {
+      text:
+        `You help people find the next part of an Instagram reel series.\n` +
+        `The user sent a reel. Below are reels the same creator posted AFTER it.\n` +
+        `Decide which one (if any) is part ${want} of the SAME series/story as the sent reel.\n` +
+        `Use on-screen text in the covers (e.g. "Part ${want}", "pt ${want}"), same people/outfits/setting, ` +
+        `and captions that continue the same story. A different topic is NOT a match even if it says "part ${want}".\n` +
+        `If nothing is clearly the next part, answer null.\n` +
+        `Reply ONLY with JSON: {"match": <candidate number or null>, "confidence": <0-1>, "reason": "<short>"}`,
+    },
+    { text: `SENT REEL. Caption: ${JSON.stringify(sent.caption.slice(0, 500))}` },
+  ];
+  if (sentImg) parts.push(sentImg);
+  candidates.forEach((c, i) => {
+    const date = new Date(c.takenAt).toISOString().slice(0, 10);
+    parts.push({ text: `CANDIDATE ${i + 1} (posted ${date}). Caption: ${JSON.stringify(c.caption.slice(0, 300))}` });
+    if (candImgs[i]) parts.push(candImgs[i]);
+  });
+
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+      method: "POST",
+      headers: { "x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts }],
+        generationConfig: { responseMimeType: "application/json", temperature: 0 },
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      console.log("Gemini error:", res.status, JSON.stringify(data).slice(0, 300));
+      return null;
+    }
+    const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
+    const out = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || "{}");
+    console.log("Gemini says:", JSON.stringify(out));
+    const i = Number(out.match);
+    if (!Number.isInteger(i) || i < 1 || i > candidates.length || (out.confidence ?? 1) < 0.6) return null;
+    return candidates[i - 1];
+  } catch (e) {
+    console.log("Gemini call failed:", e.message);
+    return null;
+  }
 }
 
 const BROWSER_UA =
@@ -96,7 +248,11 @@ async function getCreator(url) {
         const m = html.match(p);
         if (m && !["whereispart2", "instagram"].includes(m[1].toLowerCase())) {
           console.log(`Creator found via ${t.name} (pattern ${p.source.slice(0, 30)})`);
-          return m[1];
+          // og:description has "... - username on October 1, 2026: ..." → posting date
+          const d = html.match(/ on ([A-Z][a-z]+ \d{1,2}, \d{4})/)?.[1];
+          const postedAt = d ? Date.parse(d) || null : null;
+          const thumb = html.match(/property="og:image"[^>]+content="([^"]+)"/)?.[1]?.replace(/&amp;/g, "&") || null;
+          return { username: m[1], postedAt, thumb };
         }
       }
       // Debug: show what the page actually contains so we can adjust
