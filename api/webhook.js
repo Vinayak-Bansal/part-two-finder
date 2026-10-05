@@ -40,7 +40,7 @@ export async function POST(request) {
         const partTwo = await findPartTwo(reel.payload, creator);
         reply = partTwo
           ? `Here's part 2: ${partTwo}`
-          : `Creator: ${creator ? "@" + creator : "unknown"}. Part 2 search coming soon 👀`;
+          : `Creator: ${creator ? "@" + creator : "unknown"}. Part 2 search coming soon`;
       } else {
         reply = "Send me a reel and I'll find part 2.";
       }
