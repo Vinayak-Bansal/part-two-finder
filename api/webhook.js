@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { waitUntil } from "@vercel/functions";
 
 const GRAPH = "https://graph.instagram.com/v23.0";
 const { VERIFY_TOKEN, IG_TOKEN, APP_SECRET, GEMINI_API_KEY } = process.env;
@@ -26,6 +27,13 @@ export async function POST(request) {
   }
 
   const body = JSON.parse(raw);
+  // Reply 200 to Meta right away (it retries slow webhooks, causing double replies); work continues in background
+  waitUntil(handleEvents(body).catch(e => console.log("Handler error:", e.message)));
+  return new Response("EVENT_RECEIVED", { status: 200 });
+}
+
+
+async function handleEvents(body) {
   for (const entry of body.entry || []) {
     for (const event of entry.messaging || []) {
       const msg = event.message;
@@ -53,7 +61,6 @@ export async function POST(request) {
       await sendText(senderId, reply);
     }
   }
-  return new Response("EVENT_RECEIVED", { status: 200 });
 }
 
 // ---------- Part 2 finder ----------
@@ -155,6 +162,7 @@ function partNumber(text) {
 }
 
 function words(text) {
+  text = text.replace(/[#@][\p{L}\p{N}_.]+/gu, " "); // hashtags/mentions are shared by every post
   return new Set((text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) || []).filter(w => !w.startsWith("http")));
 }
 function similarity(a, b) {
@@ -198,7 +206,7 @@ async function findPartTwo(payload, info, onSlow) {
   // 2) AI path: let Gemini look at the covers + captions
   if (!GEMINI_API_KEY) return null;
   await onSlow?.();
-  const pick = await askGemini({ caption, thumb: original?.thumb || info.thumb }, candidates.slice(0, 10), want);
+  const pick = await askGemini({ caption, thumb: original?.thumb || info.thumb }, candidates.slice(0, 20), want);
   return pick;
 }
 

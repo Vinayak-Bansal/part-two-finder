@@ -2,5 +2,10 @@
   "name": "part-two-finder",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@vercel/functions": "^3.9.11"
+  }
 }
