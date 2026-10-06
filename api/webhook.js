@@ -48,12 +48,18 @@ async function handleEvents(body) {
         const info = await getCreator(reel.payload.url); // { username, postedAt }
         console.log("Creator:", JSON.stringify(info));
         if (!info?.username) {
-          reply = "Couldn't tell who posted this reel. Try again in a bit.";
+          reply = "Couldn't open this reel (it might be age-restricted or private). Try a different one.";
         } else {
-          const p2 = await findPartTwo(reel.payload, info, () => sendText(senderId, "Looking for part 2..."));
-          reply = p2
-            ? `Here's part 2: https://www.instagram.com/reel/${p2.shortcode}/`
-            : `Couldn't find part 2 yet. Check @${info.username}'s page, it might not be out yet.`;
+          const { post, reason } = await findPartTwo(reel.payload, info, () => sendText(senderId, "Looking for part 2..."));
+          console.log("Result:", post?.shortcode || reason);
+          const u = `@${info.username}`;
+          reply = post
+            ? `Here's part 2: https://www.instagram.com/reel/${post.shortcode}/`
+            : {
+                personal: `${u} is a personal account, so I can't see their other reels. Check their page for part 2.`,
+                not_out: `${u} hasn't posted anything since this reel, so part 2 isn't out yet.`,
+                ai_down: `I'm a bit overloaded right now. Send the reel again in a minute.`,
+              }[reason] || `Couldn't find part 2 yet. Check ${u}'s page, it might not be out yet.`;
         }
       } else {
         reply = "Send me a reel and I'll find part 2.";
@@ -70,9 +76,10 @@ async function handleEvents(body) {
 async function getRecentPosts(username, sinceMs) {
   if (FB_PAGE_TOKEN && IG_BUSINESS_ID) {
     const posts = await businessDiscovery(username, sinceMs);
-    if (posts) return posts;
+    if (posts === "not_found") return { posts: [], personal: true };
+    if (posts) return { posts };
   }
-  return webProfilePosts(username);
+  return { posts: await webProfilePosts(username) };
 }
 
 const BD_FIELDS_FULL = "id,caption,timestamp,permalink,media_type,media_product_type,thumbnail_url,media_url";
@@ -100,6 +107,7 @@ async function businessDiscovery(username, sinceMs) {
         continue;
       }
       console.log("Business Discovery failed:", JSON.stringify(data.error).slice(0, 300));
+      if (data.error.code === 110) return "not_found"; // personal (non-creator) account
       return all.length ? all : null;
     }
     const m = data.business_discovery?.media;
@@ -176,38 +184,43 @@ function similarity(a, b) {
 async function findPartTwo(payload, info, onSlow) {
   const code = payload.url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
   const caption = payload.title || "";
-  const posts = await getRecentPosts(info.username, info.postedAt);
-  if (!posts.length) return null;
+  const { posts, personal } = await getRecentPosts(info.username, info.postedAt);
+  if (personal) return { reason: "personal" };
+  if (!posts.length) return { reason: "no_posts" };
 
   // When was the original posted? Use the list if it's there, else the date from the page.
   const original = posts.find(p => p.shortcode === code);
   const after = original?.takenAt ?? info.postedAt ?? 0;
   const candidates = posts.filter(p => p.shortcode !== code && p.takenAt > after);
-  if (!candidates.length) return null;
+  console.log(`${candidates.length} posts after the sent reel (original ${original ? "found" : "not in list"})`);
+  if (!candidates.length) return { reason: "not_out" };
 
   // If the reel you sent is part N, look for part N+1 (default: part 1 → find part 2)
   const sentPart = partNumber(caption);
   const want = (sentPart || 1) + 1;
 
-  // 1) Fast path: caption clearly says the next part and matches the series → no AI needed
-  let best = null;
+  // 1) Fast path, only when it's unambiguous: the sent reel says "part N" (or captions nearly match)
+  //    AND exactly one later post says "part N+1". Otherwise let the AI verify.
+  const labeled = [];
   for (const p of candidates) {
     const sim = similarity(caption, p.caption);
     const n = partNumber(p.caption);
-    const clear = n === want && (sim >= 0.2 || sentPart);
-    console.log(`Candidate ${p.shortcode} part=${n} sim=${sim.toFixed(2)} clear=${clear} "${p.caption.slice(0, 50)}"`);
-    if (clear && (!best || p.takenAt < best.takenAt)) best = p; // earliest matching
+    const ok = n === want && ((sentPart && sim >= 0.2) || sim >= 0.5);
+    console.log(`Candidate ${p.shortcode} part=${n} sim=${sim.toFixed(2)} ok=${ok} "${p.caption.slice(0, 50)}"`);
+    if (ok) labeled.push(p);
   }
-  if (best) {
-    console.log("Matched by caption:", best.shortcode);
-    return best;
+  if (labeled.length === 1) {
+    console.log("Matched by caption:", labeled[0].shortcode);
+    return { post: labeled[0] };
   }
 
-  // 2) AI path: let Gemini look at the covers + captions
-  if (!GEMINI_API_KEY) return null;
+  // 2) AI path: Gemini looks at covers + captions (part-labeled posts first, then nearest in time)
+  if (!GEMINI_API_KEY) return { reason: "no_match" };
   await onSlow?.();
-  const pick = await askGemini({ caption, thumb: original?.thumb || info.thumb }, candidates.slice(0, 20), want);
-  return pick;
+  const ordered = [...labeled, ...candidates.filter(c => !labeled.includes(c))].slice(0, 20);
+  const ai = await askGemini({ caption, thumb: original?.thumb || info.thumb }, ordered, want);
+  if (ai === "down") return { reason: "ai_down" };
+  return ai ? { post: ai } : { reason: "no_match" };
 }
 
 // Download an image and return it base64-encoded for Gemini
@@ -246,20 +259,31 @@ async function askGemini(sent, candidates, want) {
     if (candImgs[i]) parts.push(candImgs[i]);
   });
 
-  try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-      method: "POST",
-      headers: { "x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0 },
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      console.log("Gemini error:", res.status, JSON.stringify(data).slice(0, 300));
-      return null;
+  // Try the main model, then fall back to others if Google is overloaded (503/429)
+  const models = [...new Set([GEMINI_MODEL, "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"])];
+  let data = null;
+  for (let attempt = 0; attempt < models.length + 1 && !data; attempt++) {
+    const model = models[Math.min(attempt, models.length - 1)];
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts }],
+          generationConfig: { responseMimeType: "application/json", temperature: 0 },
+        }),
+      });
+      const body = await res.json();
+      if (res.ok) { data = body; console.log("Gemini model used:", model); break; }
+      console.log(`Gemini error (${model}):`, res.status, JSON.stringify(body).slice(0, 200));
+      if (![429, 500, 503, 404].includes(res.status)) return null;
+      await new Promise(r => setTimeout(r, 800));
+    } catch (e) {
+      console.log(`Gemini call failed (${model}):`, e.message);
     }
+  }
+  if (!data) return "down";
+  try {
     const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
     const out = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || "{}");
     console.log("Gemini says:", JSON.stringify(out));
