@@ -225,7 +225,11 @@ export async function findPartTwo(payload, info, onSlow) {
   // 2) AI path: Gemini looks at covers + captions (part-labeled posts first, then nearest in time)
   if (!GEMINI_API_KEY) return { reason: "no_match" };
   await onSlow?.();
-  const ordered = [...labeled, ...candidates.filter(c => !labeled.includes(c))].slice(0, 20);
+  // Order for the AI: part-labeled first, then the most similar captions, then nearest in time
+  const bySim = candidates.filter(c => !labeled.includes(c))
+    .map(c => ({ c, sim: similarity(caption, c.caption) }))
+    .sort((a, b) => b.sim - a.sim).slice(0, 10).map(x => x.c);
+  const ordered = [...new Set([...labeled, ...bySim, ...candidates])].slice(0, 20);
   const ai = await askGemini({ caption, thumb: original?.thumb || info.thumb }, ordered, want);
   if (ai === "down") return { reason: "ai_down" };
   return ai ? { post: ai } : { reason: "no_match" };
@@ -255,7 +259,10 @@ async function askGemini(sent, candidates, want) {
         `Decide which one (if any) is part ${want} of the SAME series/story as the sent reel.\n` +
         `Use on-screen text in the covers (e.g. "Part ${want}", "pt ${want}"), same people/outfits/setting, ` +
         `and captions that continue the same story. A different topic is NOT a match even if it says "part ${want}".\n` +
-        `If nothing is clearly the next part, answer null.\n` +
+        `Many follow-ups are NOT labeled "part ${want}": e.g. the sent reel says "wait until the end", "I'm going to try this", ` +
+        `"follow for part 2", and a later reel shows the result/update/reveal on the same specific subject. Count those as the next part, ` +
+        `and pick the EARLIEST such follow-up.\n` +
+        `If nothing continues it, answer null.\n` +
         `Reply ONLY with JSON: {"match": <candidate number or null>, "confidence": <0-1>, "reason": "<short>"}`,
     },
     { text: `SENT REEL. Caption: ${JSON.stringify(sent.caption.slice(0, 500))}` },
