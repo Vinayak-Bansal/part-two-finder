@@ -118,6 +118,7 @@ async function businessDiscovery(username, sinceMs) {
         caption: item.caption || "",
         isVideo: item.media_type === "VIDEO",
         thumb: item.thumbnail_url || (item.media_type === "IMAGE" ? item.media_url : null),
+        video: item.media_type === "VIDEO" ? item.media_url : null,
       });
     }
     after = m?.paging?.cursors?.after;
@@ -230,9 +231,24 @@ export async function findPartTwo(payload, info, onSlow) {
     .map(c => ({ c, sim: similarity(caption, c.caption) }))
     .sort((a, b) => b.sim - a.sim).slice(0, 10).map(x => x.c);
   const ordered = [...new Set([...labeled, ...bySim, ...candidates])].slice(0, 20);
-  const ai = await askGemini({ caption, thumb: original?.thumb || info.thumb }, ordered, want);
-  if (ai === "down") return { reason: "ai_down" };
-  return ai ? { post: ai } : { reason: "no_match" };
+  // Captions like "Man" / "Smh" carry no info → go straight to watching the videos
+  const vagueCaption = words(caption).size < 4;
+  let ai = null;
+  if (!vagueCaption) {
+    ai = await askGemini({ caption, thumb: original?.thumb || info.thumb }, ordered, want);
+    if (ai && ai !== "down") return { post: ai };
+  }
+  // Video pass: watch the sent reel + the next few reels the creator posted
+  if (original?.video) {
+    const nearest = [...candidates].sort((a, b) => a.takenAt - b.takenAt);
+    const pool = [...new Set([...labeled, ...nearest])].filter(c => c.video).slice(0, 6);
+    const vid = await askGeminiVideo({ caption, video: original.video }, pool, want);
+    if (vid && vid !== "down") return { post: vid };
+    if (vid === "down" && (ai === "down" || vagueCaption)) return { reason: "ai_down" };
+  } else if (ai === "down") {
+    return { reason: "ai_down" };
+  }
+  return { reason: "no_match" };
 }
 
 // Download an image and return it base64-encoded for Gemini
@@ -248,23 +264,58 @@ async function imagePart(url) {
   }
 }
 
+const RULES = want =>
+  `Decide which reel(s), if any, continue the SAME series/story as the sent reel (i.e. are part ${want} or its direct follow-up).\n` +
+  `Signals: on-screen text like "Part ${want}"/"pt ${want}", the same people/characters/outfits/setting, the same specific subject, ` +
+  `a recap of the sent reel, or the payoff of a cliffhanger ("wait until the end", "follow for part 2", "I'm going to try this" → later result/update/reveal).\n` +
+  `Many follow-ups are NOT labeled "part ${want}". A different topic is NOT a match even if it says "part ${want}".\n` +
+  `Reply ONLY with JSON: {"matches": [<candidate numbers that continue it, or empty>], "confidence": <0-1>, "reason": "<short>"}`;
+
+// Call Gemini with fallbacks; returns parsed JSON, or "down" if every model failed
+async function callGemini(parts, timeoutMs = 20000) {
+  const models = [...new Set([GEMINI_MODEL, "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"])];
+  for (const model of models) {
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify({
+          contents: [{ role: "user", parts }],
+          generationConfig: { responseMimeType: "application/json", temperature: 0 },
+        }),
+      });
+      const body = await res.json();
+      if (res.ok) {
+        console.log("Gemini model used:", model);
+        const text = body.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
+        return JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || "{}");
+      }
+      console.log(`Gemini error (${model}):`, res.status, JSON.stringify(body).slice(0, 200));
+      if (![429, 500, 503, 404].includes(res.status)) return null;
+      await new Promise(r => setTimeout(r, 800));
+    } catch (e) {
+      console.log(`Gemini call failed (${model}):`, e.message);
+    }
+  }
+  return "down";
+}
+
+// From Gemini's list of matches, return the EARLIEST one (the real part 2, not a later recap)
+function pickEarliest(out, candidates, label) {
+  if (!out || out === "down") return out;
+  console.log(`Gemini (${label}) says:`, JSON.stringify(out));
+  const nums = (Array.isArray(out.matches) ? out.matches : [out.match]).map(Number)
+    .filter(i => Number.isInteger(i) && i >= 1 && i <= candidates.length);
+  if (!nums.length || (out.confidence ?? 1) < 0.6) return null;
+  return nums.map(i => candidates[i - 1]).sort((a, b) => a.takenAt - b.takenAt)[0];
+}
+
+// Pass 1: covers + captions (fast)
 async function askGemini(sent, candidates, want) {
   const [sentImg, ...candImgs] = await Promise.all([sent.thumb, ...candidates.map(c => c.thumb)].map(imagePart));
-
   const parts = [
-    {
-      text:
-        `You help people find the next part of an Instagram reel series.\n` +
-        `The user sent a reel. Below are reels the same creator posted AFTER it.\n` +
-        `Decide which one (if any) is part ${want} of the SAME series/story as the sent reel.\n` +
-        `Use on-screen text in the covers (e.g. "Part ${want}", "pt ${want}"), same people/outfits/setting, ` +
-        `and captions that continue the same story. A different topic is NOT a match even if it says "part ${want}".\n` +
-        `Many follow-ups are NOT labeled "part ${want}": e.g. the sent reel says "wait until the end", "I'm going to try this", ` +
-        `"follow for part 2", and a later reel shows the result/update/reveal on the same specific subject. Count those as the next part, ` +
-        `and pick the EARLIEST such follow-up.\n` +
-        `If nothing continues it, answer null.\n` +
-        `Reply ONLY with JSON: {"match": <candidate number or null>, "confidence": <0-1>, "reason": "<short>"}`,
-    },
+    { text: `You help people find the next part of an Instagram reel series.\nThe user sent a reel. Below are reels the same creator posted AFTER it (cover image + caption).\n` + RULES(want) },
     { text: `SENT REEL. Caption: ${JSON.stringify(sent.caption.slice(0, 500))}` },
   ];
   if (sentImg) parts.push(sentImg);
@@ -273,43 +324,50 @@ async function askGemini(sent, candidates, want) {
     parts.push({ text: `CANDIDATE ${i + 1} (posted ${date}). Caption: ${JSON.stringify(c.caption.slice(0, 300))}` });
     if (candImgs[i]) parts.push(candImgs[i]);
   });
+  return pickEarliest(await callGemini(parts), candidates, "covers");
+}
 
-  // Try the main model, then fall back to others if Google is overloaded (503/429)
-  const models = [...new Set([GEMINI_MODEL, "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"])];
-  let data = null;
-  for (let attempt = 0; attempt < models.length + 1 && !data; attempt++) {
-    const model = models[Math.min(attempt, models.length - 1)];
-    try {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-        method: "POST",
-        headers: { "x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(20000),
-        body: JSON.stringify({
-          contents: [{ role: "user", parts }],
-          generationConfig: { responseMimeType: "application/json", temperature: 0 },
-        }),
-      });
-      const body = await res.json();
-      if (res.ok) { data = body; console.log("Gemini model used:", model); break; }
-      console.log(`Gemini error (${model}):`, res.status, JSON.stringify(body).slice(0, 200));
-      if (![429, 500, 503, 404].includes(res.status)) return null;
-      await new Promise(r => setTimeout(r, 800));
-    } catch (e) {
-      console.log(`Gemini call failed (${model}):`, e.message);
-    }
-  }
-  if (!data) return "down";
+// Download a video for Gemini (inline). Skips anything too big.
+async function videoPart(url, maxBytes) {
+  if (!url) return null;
   try {
-    const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
-    const out = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || "{}");
-    console.log("Gemini says:", JSON.stringify(out));
-    const i = Number(out.match);
-    if (!Number.isInteger(i) || i < 1 || i > candidates.length || (out.confidence ?? 1) < 0.6) return null;
-    return candidates[i - 1];
-  } catch (e) {
-    console.log("Gemini call failed:", e.message);
+    const res = await fetch(url, { headers: { "User-Agent": BROWSER_UA }, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > maxBytes) return null;
+    return { bytes: buf.length, part: { inline_data: { mime_type: "video/mp4", data: buf.toString("base64") } } };
+  } catch {
     return null;
   }
+}
+
+// Pass 2: actually watch the videos (sent reel + a few candidates)
+async function askGeminiVideo(sent, candidates, want) {
+  const t0 = Date.now();
+  const [sentVid, ...candVids] = await Promise.all([sent.video, ...candidates.map(c => c.video)].map(u => videoPart(u, 12e6)));
+  if (!sentVid) { console.log("Video pass: couldn't download the sent reel"); return null; }
+  // Gemini's inline request limit is ~20MB (base64 grows ~33%), so keep total raw video under ~14MB
+  let budget = 14e6 - sentVid.bytes;
+  const kept = [];
+  candidates.forEach((c, i) => {
+    if (candVids[i] && candVids[i].bytes <= budget) { budget -= candVids[i].bytes; kept.push({ c, v: candVids[i] }); }
+  });
+  console.log(`Video pass: watching sent reel + ${kept.length} candidates (downloads ${Date.now() - t0}ms)`);
+  if (!kept.length) return null;
+  const parts = [
+    { text: `You help people find the next part of an Instagram reel series. WATCH and LISTEN to each video ` +
+            `(on-screen text, spoken words, people, setting, storyline).\nThe user sent the first video. The others were posted AFTER it by the same creator.\n` + RULES(want) },
+    { text: `SENT REEL. Caption: ${JSON.stringify(sent.caption.slice(0, 300))}` },
+    sentVid.part,
+  ];
+  kept.forEach(({ c, v }, i) => {
+    const date = new Date(c.takenAt).toISOString().slice(0, 10);
+    parts.push({ text: `CANDIDATE ${i + 1} (posted ${date}). Caption: ${JSON.stringify(c.caption.slice(0, 200))}` });
+    parts.push(v.part);
+  });
+  const out = await callGemini(parts, 60000);
+  console.log(`Video pass took ${Date.now() - t0}ms`);
+  return pickEarliest(out, kept.map(k => k.c), "video");
 }
 
 const BROWSER_UA =
