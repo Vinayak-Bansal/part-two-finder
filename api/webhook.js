@@ -236,14 +236,14 @@ export async function findPartTwo(payload, info, onSlow) {
   let ai = null;
   if (!vagueCaption) {
     ai = await askGemini({ caption, thumb: original?.thumb || info.thumb }, ordered, want);
-    if (ai && ai !== "down") return { post: ai };
+    if (ai && ai !== "down") return { post: preferEarlier(ai, candidates, caption) };
   }
   // Video pass: watch the sent reel + the next few reels the creator posted
   if (original?.video) {
     const nearest = [...candidates].sort((a, b) => a.takenAt - b.takenAt);
     const pool = [...new Set([...labeled, ...nearest])].filter(c => c.video).slice(0, 6);
     const vid = await askGeminiVideo({ caption, video: original.video }, pool, want);
-    if (vid && vid !== "down") return { post: vid };
+    if (vid && vid !== "down") return { post: preferEarlier(vid, candidates, caption) };
     if (vid === "down" && (ai === "down" || vagueCaption)) return { reason: "ai_down" };
   } else if (ai === "down") {
     return { reason: "ai_down" };
@@ -299,6 +299,18 @@ async function callGemini(parts, timeoutMs = 20000) {
     }
   }
   return "down";
+}
+
+// If an EARLIER post covers the same subject about as closely as the AI's pick, that earlier one is the real part 2
+function preferEarlier(pick, candidates, caption) {
+  const pickSim = similarity(caption, pick.caption);
+  const earlier = candidates
+    .filter(c => c.takenAt < pick.takenAt)
+    .map(c => ({ c, sim: similarity(caption, c.caption) }))
+    .filter(x => x.sim >= 0.5 && x.sim >= pickSim - 0.1)
+    .sort((a, b) => a.c.takenAt - b.c.takenAt)[0];
+  if (earlier) console.log(`Preferring earlier ${earlier.c.shortcode} (sim ${earlier.sim.toFixed(2)}) over ${pick.shortcode} (sim ${pickSim.toFixed(2)})`);
+  return earlier ? earlier.c : pick;
 }
 
 // From Gemini's list of matches, return the EARLIEST one (the real part 2, not a later recap)
