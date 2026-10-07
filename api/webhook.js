@@ -181,15 +181,16 @@ function similarity(a, b) {
   return hit / Math.min(A.size, B.size);
 }
 
-async function findPartTwo(payload, info, onSlow) {
+export async function findPartTwo(payload, info, onSlow) {
   const code = payload.url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
-  const caption = payload.title || "";
+  let caption = payload.title || "";
   const { posts, personal } = await getRecentPosts(info.username, info.postedAt);
   if (personal) return { reason: "personal" };
   if (!posts.length) return { reason: "no_posts" };
 
   // When was the original posted? Use the list if it's there, else the date from the page.
   const original = posts.find(p => p.shortcode === code);
+  if (!caption && original?.caption) caption = original.caption;
   const after = original?.takenAt ?? info.postedAt ?? 0;
   const candidates = posts.filter(p => p.shortcode !== code && p.takenAt > after);
   console.log(`${candidates.length} posts after the sent reel (original ${original ? "found" : "not in list"})`);
@@ -318,7 +319,7 @@ const PATTERNS = [
 ];
 
 // Find the creator's username from the reel's public pages (free, no API)
-async function getCreator(url) {
+export async function getCreator(url) {
   const code = url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
   if (!code) return null;
 
