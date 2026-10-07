@@ -214,6 +214,13 @@ export async function findPartTwo(payload, info, onSlow) {
     console.log("Matched by caption:", labeled[0].shortcode);
     return { post: labeled[0] };
   }
+  if (labeled.length > 1) {
+    const ranked = labeled.map(p => ({ p, sim: similarity(caption, p.caption) })).sort((a, b) => b.sim - a.sim);
+    if (ranked[0].sim - ranked[1].sim >= 0.2) {
+      console.log("Matched by caption (closest of several):", ranked[0].p.shortcode);
+      return { post: ranked[0].p };
+    }
+  }
 
   // 2) AI path: Gemini looks at covers + captions (part-labeled posts first, then nearest in time)
   if (!GEMINI_API_KEY) return { reason: "no_match" };
@@ -269,6 +276,7 @@ async function askGemini(sent, candidates, want) {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: "POST",
         headers: { "x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(20000),
         body: JSON.stringify({
           contents: [{ role: "user", parts }],
           generationConfig: { responseMimeType: "application/json", temperature: 0 },
@@ -307,6 +315,8 @@ const PATTERNS = [
   // og:description: "123 likes, 4 comments - username on October 1, 2026: ..."
   new RegExp(`comments? - ${U} on [A-Z][a-z]+ \\d`),
   new RegExp(`likes?, \\d[\\d,.KM]* comments? - ${U}`),
+  new RegExp(`og:description" content="${U} on [A-Z][a-z]+ \\d{1,2}, \\d{4}`),
+  new RegExp(`content="${U} on [A-Z][a-z]+ \\d{1,2}, \\d{4}[^"]*" property="og:description`),
   // og:title / title: "Name (@username) • Instagram" or "@username on Instagram"
   new RegExp(`\\(@${U}\\)`),
   new RegExp(`@${U} on Instagram`),

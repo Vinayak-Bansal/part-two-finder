@@ -33,5 +33,20 @@ export async function GET(request) {
       call("user token perms", `${G}/me/permissions?access_token=${p.get("ut")}`),
     ] : []),
   ]);
+  // Optional: search a creator's last ~200 posts for a word (?search=pixel)
+  if (p.get("search")) {
+    const term = p.get("search").toLowerCase();
+    const hits = [];
+    let after = null;
+    for (let i = 0; i < 4; i++) {
+      const media = `media${after ? `.after(${after})` : ""}.limit(50){caption,timestamp,permalink}`;
+      const r = await call("page", `${G}/${IG_BUSINESS_ID}?fields=${q(`business_discovery.username(${u}){${media}}`)}&${t}`);
+      const m = r.body?.business_discovery?.media;
+      for (const it of m?.data || []) if ((it.caption || "").toLowerCase().includes(term)) hits.push({ date: it.timestamp, link: it.permalink, caption: (it.caption || "").slice(0, 120) });
+      after = m?.paging?.cursors?.after;
+      if (!after) break;
+    }
+    return Response.json({ search: term, hits });
+  }
   return Response.json({ hasPageToken: !!FB_PAGE_TOKEN, igBusinessId: IG_BUSINESS_ID, results });
 }
