@@ -325,7 +325,8 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
   // Captions like "Man" / "Smh" carry no info → go straight to watching the videos
   const vagueCaption = words(caption).size < 4;
   let ai = null;
-  if (!vagueCaption) {
+  // (if we can't watch the video, covers are all we have, so use them anyway)
+  if (!vagueCaption || !original?.video) {
     ai = await askGemini({ caption, thumb: original?.thumb || info.thumb }, ordered, want);
     trace.push(`covers: ${ai === "down" ? "down" : ai?.shortcode || "none"}`);
     if (ai && ai !== "down") return { post: preferEarlier(ai, candidates, caption) };
