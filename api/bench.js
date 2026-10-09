@@ -29,7 +29,7 @@ export async function GET(request) {
   let pairs = [];
   const found = {};
   for (const u of users) {
-    const { posts, personal } = await getRecentPosts(u, Date.now() - 365 * 864e5);
+    const { posts, personal } = await getRecentPosts(u, Date.now() - Number(p.get("days") || 365) * 864e5);
     const ps = personal ? [] : buildPairs(u, posts);
     found[u] = personal ? "personal account" : `${posts.length} posts, ${ps.length} series pairs`;
     pairs.push(...ps.slice(0, Number(p.get("per") || 3))); // at most 3 per creator so one account doesn't dominate
