@@ -34,6 +34,10 @@ export async function GET(request) {
     found[u] = personal ? "personal account" : `${posts.length} posts, ${ps.length} series pairs`;
     pairs.push(...ps.slice(0, 3)); // at most 3 per creator so one account doesn't dominate
   }
+  if (max === 0) {
+    return Response.json({ creators: found, totalPairs: pairs.length,
+      sample: pairs.slice(0, 30).map(c => `${c.username}: ${c.sent.caption.slice(0, 50)} -> ${c.expected.caption.slice(0, 40)}`) });
+  }
   const batch = pairs.slice(offset, offset + max);
 
   // 2. Run the finder on each (2 at a time)

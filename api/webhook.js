@@ -289,7 +289,7 @@ const RULES = want =>
 
 // Call Gemini with fallbacks; returns parsed JSON, or "down" if every model failed
 async function callGemini(parts, timeoutMs = 20000) {
-  const models = [...new Set([GEMINI_MODEL, "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"])];
+  const models = [...new Set([GEMINI_MODEL, "gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"])];
   for (const model of models) {
     try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
