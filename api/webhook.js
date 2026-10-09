@@ -237,6 +237,13 @@ export function similarity(a, b) {
 }
 
 export async function findPartTwo(payload, info, onSlow) {
+  const trace = [];
+  const r = await findPartTwoInner(payload, info, onSlow, trace);
+  console.log("Trace:", trace.join(" | "));
+  return { ...r, trace };
+}
+
+async function findPartTwoInner(payload, info, onSlow, trace) {
   const code = payload.url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
   let caption = payload.title || "";
   let { posts, personal, busy } = await getRecentPosts(info.username, info.postedAt);
@@ -254,12 +261,13 @@ export async function findPartTwo(payload, info, onSlow) {
   if (!caption && original?.caption) caption = original.caption;
   const after = original?.takenAt ?? info.postedAt ?? 0;
   const candidates = posts.filter(p => p.shortcode !== code && p.takenAt > after);
-  console.log(`${candidates.length} posts after the sent reel (original ${original ? "found" : "not in list"})`);
+  trace.push(`${posts.length} posts, ${candidates.length} after sent reel, original ${original ? "found" : "missing"}${original?.video ? " +video" : ""}`);
   if (!candidates.length) return { reason: "not_out" };
 
   // If the reel you sent is part N, look for part N+1 (default: part 1 → find part 2)
   const sentPart = partNumber(caption);
   const want = (sentPart || 1) + 1;
+  trace.push(`sentPart=${sentPart} want=${want}`);
 
   // 1) Fast path, only when it's unambiguous: the sent reel says "part N" (or captions nearly match)
   //    AND exactly one later post says "part N+1". Otherwise let the AI verify.
@@ -268,17 +276,17 @@ export async function findPartTwo(payload, info, onSlow) {
     const sim = similarity(caption, p.caption);
     const n = partNumber(p.caption);
     const ok = n === want && ((sentPart && sim >= 0.2) || sim >= 0.5);
-    console.log(`Candidate ${p.shortcode} part=${n} sim=${sim.toFixed(2)} ok=${ok} "${p.caption.slice(0, 50)}"`);
+    if ((n !== null || sim >= 0.5) && trace.length < 14) trace.push(`cand ${p.shortcode} part=${n} sim=${sim.toFixed(2)}${ok ? " OK" : ""}`);
     if (ok) labeled.push(p);
   }
   if (labeled.length === 1) {
-    console.log("Matched by caption:", labeled[0].shortcode);
+    trace.push("fast path");
     return { post: labeled[0] };
   }
   if (labeled.length > 1) {
     const ranked = labeled.map(p => ({ p, sim: similarity(caption, p.caption) })).sort((a, b) => b.sim - a.sim);
     if (ranked[0].sim - ranked[1].sim >= 0.2) {
-      console.log("Matched by caption (closest of several):", ranked[0].p.shortcode);
+      trace.push("fast path (closest)");
       return { post: ranked[0].p };
     }
   }
@@ -296,6 +304,7 @@ export async function findPartTwo(payload, info, onSlow) {
   let ai = null;
   if (!vagueCaption) {
     ai = await askGemini({ caption, thumb: original?.thumb || info.thumb }, ordered, want);
+    trace.push(`covers: ${ai === "down" ? "down" : ai?.shortcode || "none"}`);
     if (ai && ai !== "down") return { post: preferEarlier(ai, candidates, caption) };
   }
   // Video pass: watch the sent reel + the next few reels the creator posted
@@ -306,6 +315,7 @@ export async function findPartTwo(payload, info, onSlow) {
     console.log(`Video pass pool: ${withVid}/${candidates.length} candidates have a video URL; sent reel video: ${!!original.video}`);
     const pool = [...new Set([...labeled, ...nearest])].filter(c => c.video).slice(0, 6);
     const vid = await askGeminiVideo({ caption, video: original.video }, pool, want);
+    trace.push(`video(${pool.length}): ${vid === "down" ? "down" : vid?.shortcode || "none"}`);
     if (vid && vid !== "down") return { post: preferEarlier(vid, candidates, caption) };
     if (vid === "down" && (ai === "down" || vagueCaption)) return { reason: "ai_down" };
   } else if (ai === "down") {

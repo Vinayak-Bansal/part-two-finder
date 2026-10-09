@@ -10,8 +10,8 @@ async function runCase(reel, expected, blind) {
   try {
     const info = await getCreator(reel);
     if (!info?.username) return { reel, expected, got: null, reason: "no_creator", ms: Date.now() - t0 };
-    const { post, reason } = await findPartTwo({ url: reel, title: "" }, { ...info, blind });
-    return { reel, creator: info.username, expected, got: post?.shortcode || null, reason: reason || null, ms: Date.now() - t0 };
+    const { post, reason, trace } = await findPartTwo({ url: reel, title: "" }, { ...info, blind });
+    return { reel, creator: info.username, expected, got: post?.shortcode || null, reason: reason || null, ms: Date.now() - t0, trace };
   } catch (e) {
     return { reel, expected, got: null, reason: "error: " + e.message, ms: Date.now() - t0 };
   }
