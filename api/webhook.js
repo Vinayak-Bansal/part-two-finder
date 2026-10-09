@@ -162,19 +162,35 @@ async function webProfilePosts(username) {
 }
 
 // Detect "part 3", "pt.3", "p3", "3/5" → 3
-const NUM_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+const NUMW = "\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|dos|tres|dois|três";
+const LABEL = "part|pt|parte|episode|episodio|episódio|ep|chapter|cap[ií]tulo|भाग";
+// "Follow for part 2", "Part 2 coming soon", "Comment PART 2" -> this reel is the part BEFORE that number
+const TEASER = new RegExp(
+  `(?:follow|wait|comment|like|subscribe|stay tuned|want)\\s+(?:for\\s+|to\\s+see\\s+)?(?:the\\s+)?(?:${LABEL})\\.?\\s*(${NUMW})\\b` +
+  `|\\b(?:${LABEL})\\.?\\s*(${NUMW})\\s*(?:coming|soon|tomorrow|next|dekhne|के\\s*लिए|ke\\s*liye|loading)`, "i");
+const MAIN = new RegExp(`(?:^|[^\\p{L}])(?:${LABEL})\\.?\\s*[-#:|]?\\s*(${NUMW})\\b|\\bp(\\d{1,2})\\b|\\b(\\d{1,2})\\s*\\/\\s*\\d{1,3}\\b`, "iu");
+const NUMV = { one: 1, two: 2, dos: 2, dois: 2, three: 3, tres: 3, "três": 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+const toNum = v => NUMV[v.toLowerCase()] ?? parseInt(v, 10);
+
 export function stripPart(text) {
   return (text || "")
-    .replace(/\b(?:part|pt)\.?\s*(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi, " ")
-    .replace(/\bp\d{1,2}\b|\b\d{1,2}\/\d{1,2}\b/gi, " ")
+    .replace(new RegExp(TEASER.source, "giu"), " ")
+    .replace(new RegExp(`(?:${LABEL})\\.?\\s*[-#:|]?\\s*(?:${NUMW})\\b`, "giu"), " ")
+    .replace(/\bp\d{1,2}\b|\b\d{1,2}\s*\/\s*\d{1,3}\b/gi, " ")
     .replace(/\s+/g, " ").trim();
 }
 
 export function partNumber(text) {
-  const m = text.match(/\b(?:part|pt)\.?\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\b|\bp(\d{1,2})\b|\b(\d{1,2})\/\d{1,2}\b/i);
-  if (!m) return null;
-  const v = (m[1] || m[2] || m[3]).toLowerCase();
-  return NUM_WORDS[v] ?? parseInt(v, 10);
+  text = text || "";
+  const teaser = text.match(TEASER);
+  const rest = teaser ? text.replace(new RegExp(TEASER.source, "giu"), " ") : text;
+  // "Part 2 - Episode 6": the episode number is the running count
+  const ep = rest.match(new RegExp(`\\b(?:episode|episodio|episódio|ep)\\.?\\s*[-#:]?\\s*(${NUMW})\\b`, "iu"));
+  if (ep) return toNum(ep[1]);
+  const m = rest.match(MAIN);
+  if (m) return toNum(m[1] || m[2] || m[3]);
+  if (teaser) { const n = toNum(teaser[1] || teaser[2]); return n > 1 ? n - 1 : null; }
+  return null;
 }
 
 function words(text) {
