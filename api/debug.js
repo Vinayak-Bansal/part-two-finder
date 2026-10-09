@@ -20,7 +20,7 @@ export async function GET(request) {
   const t = `access_token=${FB_PAGE_TOKEN}`;
   const q = s => encodeURIComponent(s);
 
-  const results = await Promise.all([
+  const results = p.get("tag") || p.get("search") ? [] : await Promise.all([
     call("token scopes", `${G}/debug_token?input_token=${FB_PAGE_TOKEN}&${t}`),
     call("page me", `${G}/me?fields=id,name&${t}`),
     call("ig account", `${G}/${IG_BUSINESS_ID}?fields=id,username&${t}`),
