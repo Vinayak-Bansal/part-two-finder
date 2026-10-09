@@ -14,7 +14,7 @@ async function call(label, url) {
 
 export async function GET(request) {
   const p = new URL(request.url).searchParams;
-  if (p.get("key") !== VERIFY_TOKEN) return new Response("Forbidden", { status: 403 });
+  if (![VERIFY_TOKEN, process.env.TEST_KEY].filter(Boolean).includes(p.get("key"))) return new Response("Forbidden", { status: 403 });
   const u = p.get("u") || "instagram";
   const G = "https://graph.facebook.com/v23.0";
   const t = `access_token=${FB_PAGE_TOKEN}`;

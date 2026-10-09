@@ -21,7 +21,7 @@ function buildPairs(username, posts) {
 
 export async function GET(request) {
   const p = new URL(request.url).searchParams;
-  if (p.get("key") !== VERIFY_TOKEN) return new Response("Forbidden", { status: 403 });
+  if (![VERIFY_TOKEN, process.env.TEST_KEY].filter(Boolean).includes(p.get("key"))) return new Response("Forbidden", { status: 403 });
   const users = (p.get("users") || "").split(",").map(s => s.trim()).filter(Boolean);
   const max = Number(p.get("max") || 8), offset = Number(p.get("offset") || 0), blind = p.get("blind") === "1";
 
