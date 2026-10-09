@@ -59,6 +59,7 @@ async function handleEvents(body) {
                 personal: `${u} is a personal account, so I can't see their other reels. Check their page for part 2.`,
                 not_out: `${u} hasn't posted anything since this reel, so part 2 isn't out yet.`,
                 ai_down: `I'm a bit overloaded right now. Send the reel again in a minute.`,
+                busy: `I'm getting a lot of requests right now. Send the reel again in a few minutes.`,
               }[reason] || `Couldn't find part 2 yet. Check ${u}'s page, it might not be out yet.`;
         }
       } else {
@@ -73,13 +74,31 @@ async function handleEvents(body) {
 
 // Get a creator's posts, newest first. Uses Meta's official Business Discovery API when set up,
 // otherwise the public web endpoint (often blocked from servers).
+// Short in-memory cache (per warm server instance) so repeat reels from the same creator
+// don't burn Business Discovery calls (Meta rate-limits them per hour).
+const postCache = new Map(); // username -> { at, sinceMs, result }
+const CACHE_MS = 10 * 60 * 1000;
+
 export async function getRecentPosts(username, sinceMs) {
+  const key = username.toLowerCase();
+  const hit = postCache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS && (!sinceMs || !hit.sinceMs || hit.sinceMs <= sinceMs)) {
+    console.log(`Post cache hit for @${username}`);
+    return hit.result;
+  }
+  let result;
   if (FB_PAGE_TOKEN && IG_BUSINESS_ID) {
     const posts = await businessDiscovery(username, sinceMs);
-    if (posts === "not_found") return { posts: [], personal: true };
-    if (posts) return { posts };
+    if (posts === "not_found") result = { posts: [], personal: true };
+    else if (posts === "rate_limited") return { posts: [], busy: true };
+    else if (posts) result = { posts };
   }
-  return { posts: await webProfilePosts(username) };
+  if (!result) result = { posts: await webProfilePosts(username) };
+  if (result.personal || result.posts.length) {
+    postCache.set(key, { at: Date.now(), sinceMs, result });
+    if (postCache.size > 200) postCache.delete(postCache.keys().next().value);
+  }
+  return result;
 }
 
 const BD_FIELDS_FULL = "id,caption,timestamp,permalink,media_type,media_product_type,thumbnail_url,media_url";
@@ -108,6 +127,7 @@ async function businessDiscovery(username, sinceMs) {
       }
       console.log("Business Discovery failed:", JSON.stringify(data.error).slice(0, 300));
       if (data.error.code === 110) return "not_found"; // personal (non-creator) account
+      if ([4, 17, 32, 613].includes(data.error.code)) return all.length ? all : "rate_limited";
       return all.length ? all : null;
     }
     const m = data.business_discovery?.media;
@@ -208,7 +228,8 @@ export function similarity(a, b) {
 export async function findPartTwo(payload, info, onSlow) {
   const code = payload.url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
   let caption = payload.title || "";
-  let { posts, personal } = await getRecentPosts(info.username, info.postedAt);
+  let { posts, personal, busy } = await getRecentPosts(info.username, info.postedAt);
+  if (busy) return { reason: "busy" };
   // Benchmark "blind" mode: hide "part N" labels from captions so the bot must use covers/video
   if (info.blind) {
     posts = posts.map(p => ({ ...p, caption: stripPart(p.caption) }));
