@@ -32,11 +32,11 @@ export async function GET(request) {
     const { posts, personal } = await getRecentPosts(u, Date.now() - 365 * 864e5);
     const ps = personal ? [] : buildPairs(u, posts);
     found[u] = personal ? "personal account" : `${posts.length} posts, ${ps.length} series pairs`;
-    pairs.push(...ps.slice(0, 3)); // at most 3 per creator so one account doesn't dominate
+    pairs.push(...ps.slice(0, Number(p.get("per") || 3))); // at most 3 per creator so one account doesn't dominate
   }
   if (max === 0) {
     return Response.json({ creators: found, totalPairs: pairs.length,
-      sample: pairs.slice(0, 30).map(c => `${c.username}: ${c.sent.caption.slice(0, 50)} -> ${c.expected.caption.slice(0, 40)}`) });
+      sample: pairs.slice(0, Number(p.get("n") || 30)).map(c => `${c.username} ${c.sent.shortcode}>${c.expected.shortcode} | ${c.sent.caption.replace(/\s+/g, " ").slice(0, 45)} -> ${c.expected.caption.replace(/\s+/g, " ").slice(0, 35)}`) });
   }
   const batch = pairs.slice(offset, offset + max);
 
