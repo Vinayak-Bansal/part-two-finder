@@ -50,6 +50,27 @@ export async function GET(request) {
     }
     return Response.json(out);
   }
+  // Optional: discover creators via hashtag (?tag=part2) -> recent + top media, with creator usernames
+  if (p.get("tag")) {
+    const hs = await call("hashtag", `${G}/ig_hashtag_search?user_id=${IG_BUSINESS_ID}&q=${encodeURIComponent(p.get("tag"))}&${t}`);
+    const hid = hs.body?.data?.[0]?.id;
+    if (!hid) return Response.json({ error: hs.body });
+    const fields = "id,caption,permalink,timestamp,media_type";
+    const [recent, top] = await Promise.all([
+      call("recent", `${G}/${hid}/recent_media?user_id=${IG_BUSINESS_ID}&fields=${fields}&limit=50&${t}`),
+      call("top", `${G}/${hid}/top_media?user_id=${IG_BUSINESS_ID}&fields=${fields}&limit=50&${t}`),
+    ]);
+    const items = [...(recent.body?.data || []), ...(top.body?.data || [])].filter(m => m.media_type === "VIDEO");
+    const { getCreator } = await import("./webhook.js");
+    const out = [];
+    for (let i = 0; i < items.length; i += 8) {
+      out.push(...await Promise.all(items.slice(i, i + 8).map(async m => {
+        const c = await getCreator(m.permalink).catch(() => null);
+        return { user: c?.username || null, link: m.permalink, caption: (m.caption || "").slice(0, 80) };
+      })));
+    }
+    return Response.json({ tag: p.get("tag"), errors: [recent.body?.error, top.body?.error].filter(Boolean), count: out.length, items: out });
+  }
   // Optional: inspect a reel page for a video URL (?reel=SHORTCODE)
   if (p.get("reel")) {
     const out = {};
