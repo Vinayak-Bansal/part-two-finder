@@ -57,8 +57,8 @@ export async function GET(request) {
     if (!hid) return Response.json({ error: hs.body });
     const fields = "id,caption,permalink,timestamp,media_type";
     const [recent, top] = await Promise.all([
-      call("recent", `${G}/${hid}/recent_media?user_id=${IG_BUSINESS_ID}&fields=${fields}&limit=50&${t}`),
-      call("top", `${G}/${hid}/top_media?user_id=${IG_BUSINESS_ID}&fields=${fields}&limit=50&${t}`),
+      call("recent", `${G}/${hid}/recent_media?user_id=${IG_BUSINESS_ID}&fields=${fields}&limit=${p.get("limit") || 25}&${t}`),
+      call("top", `${G}/${hid}/top_media?user_id=${IG_BUSINESS_ID}&fields=${fields}&limit=${p.get("limit") || 25}&${t}`),
     ]);
     const items = [...(recent.body?.data || []), ...(top.body?.data || [])].filter(m => m.media_type === "VIDEO");
     const { getCreator } = await import("./webhook.js");
