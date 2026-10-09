@@ -33,6 +33,25 @@ export async function GET(request) {
       call("user token perms", `${G}/me/permissions?access_token=${p.get("ut")}`),
     ] : []),
   ]);
+  // Optional: inspect a reel page for a video URL (?reel=SHORTCODE)
+  if (p.get("reel")) {
+    const out = {};
+    for (const ua of ["facebookexternalhit/1.1", "Twitterbot/1.0", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"]) {
+      for (const path of [`reel/${p.get("reel")}/`, `reel/${p.get("reel")}/embed/`]) {
+        try {
+          const r = await fetch(`https://www.instagram.com/${path}`, { headers: { "User-Agent": ua } });
+          const h = await r.text();
+          out[`${ua.slice(0, 12)} ${path}`] = {
+            status: r.status, bytes: h.length,
+            ogVideo: h.match(/property="og:video(?::secure_url)?" content="([^"]+)"/)?.[1]?.slice(0, 120) || null,
+            videoUrl: (h.match(/\\?"video_url\\?":\\?"([^"\\]+)/)?.[1] || null)?.slice(0, 120),
+            mp4: (h.match(/https:[^"'\s]+?\.mp4[^"'\s]*/)?.[0] || null)?.slice(0, 120),
+          };
+        } catch (e) { out[path] = e.message; }
+      }
+    }
+    return Response.json(out);
+  }
   // Optional: search a creator's last ~200 posts for a word (?search=pixel)
   if (p.get("search")) {
     const term = p.get("search").toLowerCase();
