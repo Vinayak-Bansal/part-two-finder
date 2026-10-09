@@ -1,6 +1,6 @@
 // Private accuracy test: /api/test?key=<VERIFY_TOKEN>&cases=<reelURL>><part2URL or none>|<reelURL>><...>
 // Runs the real finder on each reel (no DMs sent) and scores it against the known answer.
-import { getCreator, findPartTwo } from "./webhook.js";
+import { getCreator, findPartTwo, getRecentPosts } from "./webhook.js";
 
 const { VERIFY_TOKEN } = process.env;
 const code = u => u?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1] || null;
@@ -21,6 +21,13 @@ export async function GET(request) {
   const p = new URL(request.url).searchParams;
   if (![VERIFY_TOKEN, process.env.TEST_KEY].filter(Boolean).includes(p.get("key"))) return new Response("Forbidden", { status: 403 });
   const blind = p.get("blind") === "1";
+  // ?peek=<username>&codes=a,b : show captions/dates of specific posts (uses the cached post list)
+  if (p.get("peek")) {
+    const { posts } = await getRecentPosts(p.get("peek"), Date.now() - 365 * 864e5);
+    const codes = (p.get("codes") || "").split(",");
+    return Response.json(posts.filter(x => codes.includes(x.shortcode)).map(x => ({
+      code: x.shortcode, date: new Date(x.takenAt).toISOString(), video: !!x.video, caption: x.caption.slice(0, 300) })));
+  }
   const cases = (p.get("cases") || "").split("|").filter(Boolean).map(c => {
     const [reel, ans] = c.split(">");
     const full = x => x.includes("/") ? x : `https://www.instagram.com/reel/${x}/`;
