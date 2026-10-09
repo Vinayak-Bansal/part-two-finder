@@ -130,6 +130,8 @@ async function businessDiscovery(username, sinceMs) {
       console.log("Business Discovery failed:", JSON.stringify(data.error).slice(0, 300),
         "usage:", res.headers.get("x-app-usage"), res.headers.get("x-business-use-case-usage")?.slice(0, 300));
       if (data.error.code === 110) return "not_found"; // personal (non-creator) account
+      // Token blocked/expired (e.g. Facebook security checkpoint on the account): we can't look anything up
+      if (data.error.code === 190) { console.error("FB TOKEN PROBLEM - log in to facebook.com:", data.error.message); return "rate_limited"; }
       // Rate limited. A partial list that doesn't reach back to the sent reel gives wrong answers, so
       // only use it if it already covers that far.
       if ([4, 17, 32, 613].includes(data.error.code)) {
