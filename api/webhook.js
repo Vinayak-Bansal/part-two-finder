@@ -125,7 +125,8 @@ async function businessDiscovery(username, sinceMs) {
         page--;
         continue;
       }
-      console.log("Business Discovery failed:", JSON.stringify(data.error).slice(0, 300));
+      console.log("Business Discovery failed:", JSON.stringify(data.error).slice(0, 300),
+        "usage:", res.headers.get("x-app-usage"), res.headers.get("x-business-use-case-usage")?.slice(0, 300));
       if (data.error.code === 110) return "not_found"; // personal (non-creator) account
       if ([4, 17, 32, 613].includes(data.error.code)) return all.length ? all : "rate_limited";
       return all.length ? all : null;
