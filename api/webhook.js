@@ -108,9 +108,11 @@ async function businessDiscovery(username, sinceMs) {
   const all = [];
   let after = null;
   let fields = BD_FIELDS_FULL;
-  // Page back until we pass the original reel's date (max 4 pages × 50 posts)
+  // Page back until we pass the original reel's date (max 20 + 3×50 posts)
   for (let page = 0; page < 4; page++) {
-    const media = `media${after ? `.after(${after})` : ""}.limit(50){${fields}}`;
+    // Small first page (most reels people send are recent); bigger pages only if we need to go back further.
+    // Meta rate-limits this API by call count AND processing time, so don't over-fetch.
+    const media = `media${after ? `.after(${after})` : ""}.limit(${page ? 50 : 20}){${fields}}`;
     const url =
       `https://graph.facebook.com/v23.0/${IG_BUSINESS_ID}` +
       `?fields=${encodeURIComponent(`business_discovery.username(${username}){${media}}`)}` +
