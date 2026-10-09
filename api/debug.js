@@ -33,6 +33,23 @@ export async function GET(request) {
       call("user token perms", `${G}/me/permissions?access_token=${p.get("ut")}`),
     ] : []),
   ]);
+  // Optional: check each Gemini model responds (?gemini=1)
+  if (p.get("gemini")) {
+    const out = {};
+    for (const m of ["gemini-flash-latest", "gemini-3.8-flash", "gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-pro-latest"]) {
+      const t0 = Date.now();
+      try {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
+          method: "POST",
+          headers: { "x-goog-api-key": process.env.GEMINI_API_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "Reply with the single word ok" }] }] }),
+        });
+        const b = await r.json();
+        out[m] = { status: r.status, ms: Date.now() - t0, text: b.candidates?.[0]?.content?.parts?.[0]?.text?.trim(), error: b.error?.message?.slice(0, 120) };
+      } catch (e) { out[m] = { error: e.message }; }
+    }
+    return Response.json(out);
+  }
   // Optional: inspect a reel page for a video URL (?reel=SHORTCODE)
   if (p.get("reel")) {
     const out = {};
