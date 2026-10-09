@@ -342,6 +342,12 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
     trace.push(`video(${pool.length}): ${vid === "down" ? "down" : vid?.shortcode || "none"}`);
     if (vid && vid !== "down") return { post: preferEarlier(vid, candidates, caption) };
     if (vid === "down" && (ai === "down" || vagueCaption)) return { reason: "ai_down" };
+    // Covers were skipped (vague caption) and the videos didn't settle it: covers are the last try
+    if (vagueCaption && ai === null) {
+      const last = await askGemini({ caption, thumb: original?.thumb || info.thumb }, ordered, want);
+      trace.push(`covers (last try): ${last === "down" ? "down" : last?.shortcode || "none"}`);
+      if (last && last !== "down") return { post: preferEarlier(last, candidates, caption) };
+    }
   } else if (ai === "down") {
     return { reason: "ai_down" };
   }
