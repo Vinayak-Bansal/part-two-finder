@@ -42,32 +42,30 @@ async function handleEvents(body) {
       const senderId = event.sender.id;
       const reel = (msg.attachments || []).find(a => a.type === "ig_reel" || a.type === "share");
 
-      let reply;
-      if (reel) {
-        console.log("Reel received:", JSON.stringify(reel.payload));
-        const info = await getCreator(reel.payload.url); // { username, postedAt }
-        console.log("Creator:", JSON.stringify(info));
-        if (!info?.username) {
-          reply = "Couldn't open this reel (it might be age-restricted or private). Try a different one.";
-        } else {
-          const { post, reason } = await findPartTwo(reel.payload, info, () => sendText(senderId, "Looking for part 2..."));
-          console.log("Result:", post?.shortcode || reason);
-          const u = `@${info.username}`;
-          reply = post
-            ? `Here's part 2: https://www.instagram.com/reel/${post.shortcode}/`
-            : {
-                personal: `${u} is a personal account, so I can't see their other reels. Check their page for part 2.`,
-                not_out: `${u} hasn't posted anything since this reel, so part 2 isn't out yet.`,
-                ai_down: `I'm a bit overloaded right now. Send the reel again in a minute.`,
-                busy: `I'm getting a lot of requests right now. Send the reel again in a few minutes.`,
-              }[reason] || `Couldn't find part 2 yet. Check ${u}'s page, it might not be out yet.`;
-        }
-      } else {
-        reply = "Send me a reel and I'll find part 2.";
-      }
+      const reply = reel
+        ? await buildReply(reel.payload, () => sendText(senderId, "Looking for part 2..."))
+        : "Send me a reel and I'll find part 2.";
       await sendText(senderId, reply);
     }
   }
+}
+
+// The reply for a shared reel (exported so the test endpoint can check the exact DM text)
+export async function buildReply(payload, onSlow) {
+  console.log("Reel received:", JSON.stringify(payload));
+  const info = await getCreator(payload.url); // { username, postedAt }
+  console.log("Creator:", JSON.stringify(info));
+  if (!info?.username) return "Couldn't open this reel (it might be age-restricted or private). Try a different one.";
+  const { post, reason } = await findPartTwo(payload, info, onSlow);
+  console.log("Result:", post?.shortcode || reason);
+  const u = `@${info.username}`;
+  if (post) return `Here's part 2: https://www.instagram.com/reel/${post.shortcode}/`;
+  return {
+    personal: `${u} is a personal account, so I can't see their other reels. Check their page for part 2.`,
+    not_out: `${u} hasn't posted anything since this reel, so part 2 isn't out yet.`,
+    ai_down: `I'm a bit overloaded right now. Send the reel again in a minute.`,
+    busy: `I'm getting a lot of requests right now. Send the reel again in a few minutes.`,
+  }[reason] || `Couldn't find part 2 yet. Check ${u}'s page, it might not be out yet.`;
 }
 
 // ---------- Part 2 finder ----------

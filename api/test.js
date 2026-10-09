@@ -1,6 +1,6 @@
 // Private accuracy test: /api/test?key=<VERIFY_TOKEN>&cases=<reelURL>><part2URL or none>|<reelURL>><...>
 // Runs the real finder on each reel (no DMs sent) and scores it against the known answer.
-import { getCreator, findPartTwo, getRecentPosts } from "./webhook.js";
+import { getCreator, findPartTwo, getRecentPosts, buildReply } from "./webhook.js";
 
 const { VERIFY_TOKEN } = process.env;
 const code = u => u?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1] || null;
@@ -21,6 +21,13 @@ export async function GET(request) {
   const p = new URL(request.url).searchParams;
   if (![VERIFY_TOKEN, process.env.TEST_KEY].filter(Boolean).includes(p.get("key"))) return new Response("Forbidden", { status: 403 });
   const blind = p.get("blind") === "1";
+  // ?dm=<shortcode>&title=<caption> : the exact DM reply the bot would send (nothing is sent)
+  if (p.get("dm")) {
+    const t0 = Date.now();
+    let slow = false;
+    const reply = await buildReply({ url: `https://www.instagram.com/reel/${p.get("dm")}/`, title: p.get("title") || "" }, () => { slow = true; });
+    return Response.json({ reply, sentLookingMessage: slow, ms: Date.now() - t0 });
+  }
   // ?peek=<username>&codes=a,b : show captions/dates of specific posts (uses the cached post list)
   if (p.get("peek")) {
     const { posts } = await getRecentPosts(p.get("peek"), Date.now() - Number(p.get("days") || 365) * 864e5);
