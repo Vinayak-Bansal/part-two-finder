@@ -20,6 +20,11 @@ export async function GET(request) {
   const t = `access_token=${FB_PAGE_TOKEN}`;
   const q = s => encodeURIComponent(s);
 
+  // ?igbd=<user> : can the Instagram-Login app's token do Business Discovery? (separate rate limit)
+  if (p.get("igbd")) {
+    const r = await fetch(`https://graph.instagram.com/v23.0/me?fields=${q(`business_discovery.username(${p.get("igbd")}){username,media.limit(3){id,caption,timestamp,media_type,media_url,thumbnail_url,permalink}}`)}&access_token=${process.env.IG_TOKEN}`);
+    return Response.json({ status: r.status, usage: r.headers.get("x-app-usage"), body: await r.json() });
+  }
   const results = p.get("tag") || p.get("search") ? [] : await Promise.all([
     call("token scopes", `${G}/debug_token?input_token=${FB_PAGE_TOKEN}&${t}`),
     call("page me", `${G}/me?fields=id,name&${t}`),
