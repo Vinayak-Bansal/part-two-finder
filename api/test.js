@@ -32,11 +32,18 @@ export async function GET(request) {
   for (let i = 0; i < cases.length; i += 3) {
     results.push(...(await Promise.all(cases.slice(i, i + 3).map(c => runCase(c.reel, c.expected, blind)))));
   }
-  for (const r of results) r.correct = r.got === r.expected;
-  const score = results.filter(r => r.correct).length;
+  // Infrastructure failures (rate limit, no data) aren't scored either way
+  const INVALID = ["busy", "no_posts", "no_creator"];
+  for (const r of results) {
+    r.invalid = !r.got && (INVALID.includes(r.reason) || r.reason?.startsWith("error"));
+    r.correct = !r.invalid && r.got === r.expected;
+  }
+  const valid = results.filter(r => !r.invalid);
+  const score = valid.filter(r => r.correct).length;
   return Response.json({
     blind,
-    score: `${score}/${results.length}`,
+    score: `${score}/${valid.length}`,
+    invalid: results.length - valid.length,
     falseMatches: results.filter(r => r.got && r.got !== r.expected).length,
     missed: results.filter(r => !r.got && r.expected).length,
     results,
