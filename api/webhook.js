@@ -413,10 +413,15 @@ const GFILES = "https://generativelanguage.googleapis.com";
 async function videoPart(url) {
   if (!url) return null;
   try {
-    const res = await fetch(url, { headers: { "User-Agent": BROWSER_UA }, signal: AbortSignal.timeout(20000) });
+    const res = await fetch(url, { headers: { "User-Agent": BROWSER_UA }, signal: AbortSignal.timeout(30000) });
     if (!res.ok) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > 100e6) return null;
+    // Stream the video straight through to Gemini when we know its size (keeps memory low);
+    // otherwise buffer it.
+    let len = Number(res.headers.get("content-length")) || 0;
+    let body = res.body;
+    if (!len) { body = Buffer.from(await res.arrayBuffer()); len = body.length; }
+    if (len > 100e6) { res.body?.cancel?.(); return null; }
+    const buf = { length: len };
     // 1) start a resumable upload
     const start = await fetch(`${GFILES}/upload/v1beta/files`, {
       method: "POST",
@@ -435,8 +440,9 @@ async function videoPart(url) {
     // 2) send the bytes
     const up = await fetch(uploadUrl, {
       method: "POST",
-      headers: { "X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize" },
-      body: buf,
+      headers: { "X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize", "Content-Length": String(len) },
+      body,
+      duplex: "half",
     });
     let file = (await up.json())?.file;
     if (!file?.uri) { console.log("Files API upload failed:", up.status); return null; }
@@ -455,7 +461,11 @@ async function videoPart(url) {
 
 async function askGeminiVideo(sent, candidates, want) {
   const t0 = Date.now();
-  const [sentVid, ...candVids] = await Promise.all([sent.video, ...candidates.map(c => c.video)].map(u => videoPart(u)));
+  const urls = [sent.video, ...candidates.map(c => c.video)];
+  const got = new Array(urls.length);
+  let next = 0;
+  await Promise.all([0, 1, 2].map(async () => { while (next < urls.length) { const i = next++; got[i] = await videoPart(urls[i]); } }));
+  const [sentVid, ...candVids] = got;
   if (!sentVid) { console.log("Video pass: couldn't download the sent reel"); return null; }
   const kept = [];
   candidates.forEach((c, i) => { if (candVids[i]) kept.push({ c, v: candVids[i] }); });
