@@ -188,7 +188,7 @@ const LABEL = "part|pt|parte|episode|episodio|episódio|ep|chapter|cap[ií]tulo|
 const TEASER = new RegExp(
   `(?:follow|wait|comment|like|subscribe|stay tuned|want)\\s+(?:for\\s+|to\\s+see\\s+)?(?:the\\s+)?(?:${LABEL})\\.?\\s*(${NUMW})\\b` +
   `|\\b(?:${LABEL})\\.?\\s*(${NUMW})\\s*(?:coming|soon|tomorrow|next|dekhne|के\\s*लिए|ke\\s*liye|loading)`, "i");
-const MAIN = new RegExp(`(?:^|[^\\p{L}])(?:${LABEL})\\.?\\s*[-#:|]?\\s*(${NUMW})\\b|\\bp(\\d{1,2})\\b|\\b(\\d{1,2})\\s*\\/\\s*\\d{1,3}\\b`, "iu");
+const MAIN = new RegExp(`(?:^|[^\\p{L}])(?:${LABEL})\\.?\\s*[-#:|]?\\s*(${NUMW})\\b|\\bp(\\d{1,2})\\b|\\b(\\d{1,2})\\s*\\/\\s*(\\d{1,2})\\b(?!\\s*(?:cups?|tsp|tbsp|oz|lb|kg|g)\\b)`, "iu");
 const NUMV = { one: 1, two: 2, dos: 2, dois: 2, three: 3, tres: 3, "três": 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 const toNum = v => NUMV[v.toLowerCase()] ?? parseInt(v, 10);
 
@@ -208,9 +208,15 @@ export function partNumber(text) {
   const ep = rest.match(new RegExp(`\\b(?:episode|episodio|episódio|ep)\\.?\\s*[-#:]?\\s*(${NUMW})\\b`, "iu"));
   if (ep) return toNum(ep[1]);
   const m = rest.match(MAIN);
+  // "1/3" counts as a part only if it looks like a series count (not "24/7" or a "3/10" rating)
+  if (m && m[3] && !(+m[3] <= +m[4] && +m[4] >= 2 && +m[4] <= 30 && +m[4] !== 10)) return teaserNum(teaser);
   if (m) return toNum(m[1] || m[2] || m[3]);
-  if (teaser) { const n = toNum(teaser[1] || teaser[2]); return n > 1 ? n - 1 : null; }
-  return null;
+  return teaserNum(teaser);
+}
+function teaserNum(teaser) {
+  if (!teaser) return null;
+  const n = toNum(teaser[1] || teaser[2]);
+  return n > 1 ? n - 1 : null;
 }
 
 function words(text) {
