@@ -191,7 +191,7 @@ const NUMW = "\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|dos|tres
 const LABEL = "part|pt|parte|episode|episodio|episódio|ep|chapter|cap[ií]tulo|भाग";
 // "Follow for part 2", "Part 2 coming soon", "Comment PART 2" -> this reel is the part BEFORE that number
 const TEASER = new RegExp(
-  `(?:follow|wait|comment|like|subscribe|stay tuned|want)\\s+(?:for\\s+|to\\s+see\\s+)?(?:the\\s+)?(?:${LABEL})\\.?\\s*(${NUMW})\\b` +
+  `(?:follow|wait|comment|like|subscribe|stay tuned|want)\\s+(?:for\\s+|to\\s+see\\s+)?(?:the\\s+)?(?:[A-Za-z"]+\\s+){0,2}\\(?(?:${LABEL})\\.?\\s*(${NUMW})\\b` +
   `|\\b(?:${LABEL})\\.?\\s*(${NUMW})\\s*(?:coming|soon|tomorrow|next|dekhne|के\\s*लिए|ke\\s*liye|loading)`, "i");
 const MAIN = new RegExp(`(?:^|[^\\p{L}])(?:${LABEL})\\.?\\s*[-#:|]?\\s*(${NUMW})\\b|\\bp(\\d{1,2})\\b|\\b(\\d{1,2})\\s*\\/\\s*(\\d{1,2})\\b(?!\\s*(?:cups?|tsp|tbsp|oz|lb|kg|g)\\b)`, "iu");
 const NUMV = { one: 1, two: 2, dos: 2, dois: 2, three: 3, tres: 3, "três": 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
