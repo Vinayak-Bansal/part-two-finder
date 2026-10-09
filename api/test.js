@@ -23,10 +23,11 @@ export async function GET(request) {
   const blind = p.get("blind") === "1";
   // ?peek=<username>&codes=a,b : show captions/dates of specific posts (uses the cached post list)
   if (p.get("peek")) {
-    const { posts } = await getRecentPosts(p.get("peek"), Date.now() - 365 * 864e5);
+    const { posts } = await getRecentPosts(p.get("peek"), Date.now() - Number(p.get("days") || 365) * 864e5);
     const codes = (p.get("codes") || "").split(",");
-    return Response.json(posts.filter(x => codes.includes(x.shortcode)).map(x => ({
-      code: x.shortcode, date: new Date(x.takenAt).toISOString(), video: !!x.video, caption: x.caption.slice(0, 300) })));
+    const pick = p.get("codes") ? posts.filter(x => codes.includes(x.shortcode)) : posts.slice(-Number(p.get("n") || 30));
+    const len = Number(p.get("len") || 300);
+    return Response.json(pick.map(x => `${x.shortcode} ${new Date(x.takenAt).toISOString().slice(0, 16)}${x.video ? " v" : ""} | ${x.caption.replace(/\s+/g, " ").slice(0, len)}`));
   }
   const cases = (p.get("cases") || "").split("|").filter(Boolean).map(c => {
     const [reel, ans] = c.split(">");
