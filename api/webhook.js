@@ -360,32 +360,58 @@ async function askGemini(sent, candidates, want) {
   return pickEarliest(await callGemini(parts), candidates, "covers");
 }
 
-// Download a video for Gemini (inline). Skips anything too big.
-async function videoPart(url, maxBytes) {
+// Download a video and upload it to Gemini's Files API (inline requests cap at ~20MB; reels are ~8-11MB each)
+const GFILES = "https://generativelanguage.googleapis.com";
+async function videoPart(url) {
   if (!url) return null;
   try {
-    const res = await fetch(url, { headers: { "User-Agent": BROWSER_UA }, signal: AbortSignal.timeout(15000) });
+    const res = await fetch(url, { headers: { "User-Agent": BROWSER_UA }, signal: AbortSignal.timeout(20000) });
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > maxBytes) return null;
-    return { bytes: buf.length, part: { inline_data: { mime_type: "video/mp4", data: buf.toString("base64") } } };
-  } catch {
+    if (buf.length > 100e6) return null;
+    // 1) start a resumable upload
+    const start = await fetch(`${GFILES}/upload/v1beta/files`, {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": GEMINI_API_KEY,
+        "X-Goog-Upload-Protocol": "resumable",
+        "X-Goog-Upload-Command": "start",
+        "X-Goog-Upload-Header-Content-Length": String(buf.length),
+        "X-Goog-Upload-Header-Content-Type": "video/mp4",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ file: { display_name: "reel" } }),
+    });
+    const uploadUrl = start.headers.get("x-goog-upload-url");
+    if (!uploadUrl) { console.log("Files API start failed:", start.status, (await start.text()).slice(0, 150)); return null; }
+    // 2) send the bytes
+    const up = await fetch(uploadUrl, {
+      method: "POST",
+      headers: { "X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize" },
+      body: buf,
+    });
+    let file = (await up.json())?.file;
+    if (!file?.uri) { console.log("Files API upload failed:", up.status); return null; }
+    // 3) wait until Gemini has processed the video
+    for (let i = 0; i < 30 && file.state === "PROCESSING"; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      file = await (await fetch(`${GFILES}/v1beta/${file.name}`, { headers: { "x-goog-api-key": GEMINI_API_KEY } })).json();
+    }
+    if (file.state !== "ACTIVE") { console.log("Video not ready:", file.state); return null; }
+    return { bytes: buf.length, part: { file_data: { mime_type: file.mimeType || "video/mp4", file_uri: file.uri } } };
+  } catch (e) {
+    console.log("videoPart error:", e.message);
     return null;
   }
 }
 
-// Pass 2: actually watch the videos (sent reel + a few candidates)
 async function askGeminiVideo(sent, candidates, want) {
   const t0 = Date.now();
-  const [sentVid, ...candVids] = await Promise.all([sent.video, ...candidates.map(c => c.video)].map(u => videoPart(u, 12e6)));
+  const [sentVid, ...candVids] = await Promise.all([sent.video, ...candidates.map(c => c.video)].map(u => videoPart(u)));
   if (!sentVid) { console.log("Video pass: couldn't download the sent reel"); return null; }
-  // Gemini's inline request limit is ~20MB (base64 grows ~33%), so keep total raw video under ~14MB
-  let budget = 14e6 - sentVid.bytes;
   const kept = [];
-  candidates.forEach((c, i) => {
-    if (candVids[i] && candVids[i].bytes <= budget) { budget -= candVids[i].bytes; kept.push({ c, v: candVids[i] }); }
-  });
-  const sizes = candVids.map((v, i) => candidates[i].video ? (v ? Math.round(v.bytes / 1e5) / 10 + "MB" : "dl-fail/too-big") : "no-url");
+  candidates.forEach((c, i) => { if (candVids[i]) kept.push({ c, v: candVids[i] }); });
+  const sizes = candVids.map((v, i) => candidates[i].video ? (v ? Math.round(v.bytes / 1e5) / 10 + "MB" : "failed") : "no-url");
   console.log(`Video pass: watching sent reel (${Math.round(sentVid.bytes / 1e5) / 10}MB) + ${kept.length}/${candidates.length} candidates [${sizes.join(", ")}] (downloads ${Date.now() - t0}ms)`);
   if (!kept.length) return null;
   const parts = [
