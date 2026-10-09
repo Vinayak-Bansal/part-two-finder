@@ -199,7 +199,7 @@ const toNum = v => NUMV[v.toLowerCase()] ?? parseInt(v, 10);
 
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 export function shortcodeTime(code) {
-  if (!code || code.length > 12) return null;
+  if (!code || !/^[A-Za-z0-9_-]{6,12}$/.test(code)) return null;
   try {
     const id = [...code].reduce((n, c) => n * 64n + BigInt(B64.indexOf(c)), 0n);
     const t = Number(id >> 23n) + 1314220021721; // Instagram's ID epoch
