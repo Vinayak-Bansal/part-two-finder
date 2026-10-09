@@ -132,7 +132,12 @@ async function businessDiscovery(username, sinceMs) {
       console.log("Business Discovery failed:", JSON.stringify(data.error).slice(0, 300),
         "usage:", res.headers.get("x-app-usage"), res.headers.get("x-business-use-case-usage")?.slice(0, 300));
       if (data.error.code === 110) return "not_found"; // personal (non-creator) account
-      if ([4, 17, 32, 613].includes(data.error.code)) return all.length ? all : "rate_limited";
+      // Rate limited. A partial list that doesn't reach back to the sent reel gives wrong answers, so
+      // only use it if it already covers that far.
+      if ([4, 17, 32, 613].includes(data.error.code)) {
+        const oldest = all.length ? Math.min(...all.map(x => x.takenAt)) : null;
+        return oldest && sinceMs && oldest <= sinceMs ? all.sort((a, b) => a.takenAt - b.takenAt) : "rate_limited";
+      }
       return all.length ? all : null;
     }
     const m = data.business_discovery?.media;
