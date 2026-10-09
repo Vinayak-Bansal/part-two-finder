@@ -73,7 +73,7 @@ async function handleEvents(body) {
 
 // Get a creator's posts, newest first. Uses Meta's official Business Discovery API when set up,
 // otherwise the public web endpoint (often blocked from servers).
-async function getRecentPosts(username, sinceMs) {
+export async function getRecentPosts(username, sinceMs) {
   if (FB_PAGE_TOKEN && IG_BUSINESS_ID) {
     const posts = await businessDiscovery(username, sinceMs);
     if (posts === "not_found") return { posts: [], personal: true };
@@ -163,7 +163,14 @@ async function webProfilePosts(username) {
 
 // Detect "part 3", "pt.3", "p3", "3/5" → 3
 const NUM_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
-function partNumber(text) {
+export function stripPart(text) {
+  return (text || "")
+    .replace(/\b(?:part|pt)\.?\s*(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi, " ")
+    .replace(/\bp\d{1,2}\b|\b\d{1,2}\/\d{1,2}\b/gi, " ")
+    .replace(/\s+/g, " ").trim();
+}
+
+export function partNumber(text) {
   const m = text.match(/\b(?:part|pt)\.?\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\b|\bp(\d{1,2})\b|\b(\d{1,2})\/\d{1,2}\b/i);
   if (!m) return null;
   const v = (m[1] || m[2] || m[3]).toLowerCase();
@@ -174,7 +181,7 @@ function words(text) {
   text = text.replace(/[#@][\p{L}\p{N}_.]+/gu, " "); // hashtags/mentions are shared by every post
   return new Set((text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) || []).filter(w => !w.startsWith("http")));
 }
-function similarity(a, b) {
+export function similarity(a, b) {
   const A = words(a), B = words(b);
   if (!A.size || !B.size) return 0;
   let hit = 0;
@@ -185,7 +192,12 @@ function similarity(a, b) {
 export async function findPartTwo(payload, info, onSlow) {
   const code = payload.url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
   let caption = payload.title || "";
-  const { posts, personal } = await getRecentPosts(info.username, info.postedAt);
+  let { posts, personal } = await getRecentPosts(info.username, info.postedAt);
+  // Benchmark "blind" mode: hide "part N" labels from captions so the bot must use covers/video
+  if (info.blind) {
+    posts = posts.map(p => ({ ...p, caption: stripPart(p.caption) }));
+    caption = stripPart(caption);
+  }
   if (personal) return { reason: "personal" };
   if (!posts.length) return { reason: "no_posts" };
 
