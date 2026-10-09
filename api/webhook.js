@@ -284,6 +284,16 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
     return { post: labeled[0] };
   }
   if (labeled.length > 1) {
+    // Template captions make similarity useless when a creator runs many series ("Part 2" every day).
+    // Structure is more reliable: the first "part N+1" after the sent reel, before the creator starts
+    // a new series (another "part 1"/"part N"), is the one.
+    const byTime = [...candidates].sort((a, b) => a.takenAt - b.takenAt);
+    const boundary = sentPart ? byTime.find(p => { const n = partNumber(p.caption); return n !== null && n <= sentPart; }) : null;
+    const first = [...labeled].sort((a, b) => a.takenAt - b.takenAt)[0];
+    if (boundary && first.takenAt < boundary.takenAt && similarity(caption, first.caption) >= 0.3) {
+      trace.push(`fast path (first before new series ${boundary.shortcode})`);
+      return { post: first };
+    }
     const ranked = labeled.map(p => ({ p, sim: similarity(caption, p.caption) })).sort((a, b) => b.sim - a.sim);
     if (ranked[0].sim - ranked[1].sim >= 0.2) {
       trace.push("fast path (closest)");
