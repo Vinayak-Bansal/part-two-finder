@@ -104,6 +104,7 @@ export async function getRecentPosts(username, sinceMs) {
 const BD_FIELDS_FULL = "id,caption,timestamp,permalink,media_type,media_product_type,thumbnail_url,media_url";
 const BD_FIELDS_MIN = "id,caption,timestamp,permalink,media_type,media_url";
 
+let lastUsage = null;
 async function businessDiscovery(username, sinceMs) {
   const all = [];
   let after = null;
@@ -119,6 +120,7 @@ async function businessDiscovery(username, sinceMs) {
       `&access_token=${FB_PAGE_TOKEN}`;
     const res = await fetch(url);
     const data = await res.json();
+    lastUsage = res.headers.get("x-app-usage");
     if (data.error) {
       // Retry once with fewer fields in case some aren't allowed
       if (fields === BD_FIELDS_FULL && data.error.code === 100) {
@@ -148,7 +150,7 @@ async function businessDiscovery(username, sinceMs) {
     const oldest = all[all.length - 1]?.takenAt;
     if (!after || !sinceMs || (oldest && oldest < sinceMs)) break;
   }
-  console.log(`Business Discovery: ${all.length} posts for @${username}`);
+  console.log(`Business Discovery: ${all.length} posts for @${username}`, "usage:", lastUsage);
   return all.sort((a, b) => a.takenAt - b.takenAt); // oldest → newest
 }
 
