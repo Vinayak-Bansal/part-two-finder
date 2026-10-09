@@ -109,8 +109,8 @@ async function businessDiscovery(username, sinceMs) {
   const all = [];
   let after = null;
   let fields = BD_FIELDS_FULL;
-  // Page back until we pass the original reel's date (max 20 + 3×50 posts)
-  for (let page = 0; page < 4; page++) {
+  // Page back until we pass the original reel's date (max 20 + 5×50 posts)
+  for (let page = 0; page < 6; page++) {
     // Small first page (most reels people send are recent); bigger pages only if we need to go back further.
     // Meta rate-limits this API by call count AND processing time, so don't over-fetch.
     const media = `media${after ? `.after(${after})` : ""}.limit(${page ? 50 : 20}){${fields}}`;
@@ -197,6 +197,16 @@ const MAIN = new RegExp(`(?:^|[^\\p{L}])(?:${LABEL})\\.?\\s*[-#:|]?\\s*(${NUMW})
 const NUMV = { one: 1, two: 2, dos: 2, dois: 2, three: 3, tres: 3, "três": 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 const toNum = v => NUMV[v.toLowerCase()] ?? parseInt(v, 10);
 
+const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+export function shortcodeTime(code) {
+  if (!code || code.length > 12) return null;
+  try {
+    const id = [...code].reduce((n, c) => n * 64n + BigInt(B64.indexOf(c)), 0n);
+    const t = Number(id >> 23n) + 1314220021721; // Instagram's ID epoch
+    return t > 1.3e12 && t < Date.now() + 864e5 ? t : null;
+  } catch { return null; }
+}
+
 export function stripPart(text) {
   return (text || "")
     .replace(new RegExp(TEASER.source, "giu"), " ")
@@ -246,7 +256,10 @@ export async function findPartTwo(payload, info, onSlow) {
 async function findPartTwoInner(payload, info, onSlow, trace) {
   const code = payload.url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
   let caption = payload.title || "";
-  let { posts, personal, busy } = await getRecentPosts(info.username, info.postedAt);
+  // Instagram shortcodes encode the post time, so we know when the sent reel was posted even if
+  // the page didn't say.
+  const postedAt = shortcodeTime(code) || info.postedAt;
+  let { posts, personal, busy } = await getRecentPosts(info.username, postedAt);
   if (busy) return { reason: "busy" };
   // Benchmark "blind" mode: hide "part N" labels from captions so the bot must use covers/video
   if (info.blind) {
@@ -259,7 +272,7 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
   // When was the original posted? Use the list if it's there, else the date from the page.
   const original = posts.find(p => p.shortcode === code);
   if (!caption && original?.caption) caption = original.caption;
-  const after = original?.takenAt ?? info.postedAt ?? 0;
+  const after = original?.takenAt ?? postedAt ?? 0;
   const candidates = posts.filter(p => p.shortcode !== code && p.takenAt > after);
   trace.push(`${posts.length} posts, ${candidates.length} after sent reel, original ${original ? "found" : "missing"}${original?.video ? " +video" : ""}`);
   if (!candidates.length) return { reason: "not_out" };
