@@ -246,6 +246,25 @@ export function similarity(a, b) {
   return hit / Math.min(A.size, B.size);
 }
 
+// Similarity that ignores a creator's boilerplate: words that show up in lots of their captions
+// ("FIRST AMENDMENT AUDIT", "follow for more", channel names) count for little; distinctive words
+// (story titles, names, places) count for a lot. Part labels are ignored.
+export function creatorSimilarity(posts) {
+  const docs = posts.map(p => words(stripPart(p.caption)));
+  const df = new Map();
+  for (const d of docs) for (const w of d) df.set(w, (df.get(w) || 0) + 1);
+  const N = Math.max(docs.length, 1);
+  const idf = w => Math.log((N + 1) / ((df.get(w) || 0) + 0.5));
+  return (a, b) => {
+    const A = words(stripPart(a)), B = words(stripPart(b));
+    if (!A.size || !B.size) return 0;
+    let hit = 0, sa = 0, sb = 0;
+    for (const w of A) { sa += idf(w); if (B.has(w)) hit += idf(w); }
+    for (const w of B) sb += idf(w);
+    return hit / Math.min(sa, sb);
+  };
+}
+
 export async function findPartTwo(payload, info, onSlow) {
   const trace = [];
   const r = await findPartTwoInner(payload, info, onSlow, trace);
@@ -284,15 +303,18 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
 
   // 1) Fast path, only when it's unambiguous: the sent reel says "part N" (or captions nearly match)
   //    AND exactly one later post says "part N+1". Otherwise let the AI verify.
+  const wsim = creatorSimilarity(posts);
   const labeled = [];
   for (const p of candidates) {
-    const sim = similarity(caption, p.caption);
+    const sim = wsim(caption, p.caption);
     const n = partNumber(p.caption);
     const ok = n === want && ((sentPart && sim >= 0.2) || sim >= 0.5);
     if ((n !== null || sim >= 0.5) && trace.length < 14) trace.push(`cand ${p.shortcode} part=${n} sim=${sim.toFixed(2)}${ok ? " OK" : ""}`);
     if (ok) labeled.push(p);
   }
-  if (labeled.length === 1) {
+  // One labeled match whose caption clearly shares the story's distinctive words: take it.
+  // A weaker one still goes first in line for the AI to verify.
+  if (labeled.length === 1 && wsim(caption, labeled[0].caption) >= 0.35) {
     trace.push("fast path");
     return { post: labeled[0] };
   }
@@ -303,11 +325,11 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
     const byTime = [...candidates].sort((a, b) => a.takenAt - b.takenAt);
     const boundary = sentPart ? byTime.find(p => { const n = partNumber(p.caption); return n !== null && n <= sentPart; }) : null;
     const first = [...labeled].sort((a, b) => a.takenAt - b.takenAt)[0];
-    if (boundary && first.takenAt < boundary.takenAt && similarity(caption, first.caption) >= 0.3) {
+    if (boundary && first.takenAt < boundary.takenAt && wsim(caption, first.caption) >= 0.3) {
       trace.push(`fast path (first before new series ${boundary.shortcode})`);
       return { post: first };
     }
-    const ranked = labeled.map(p => ({ p, sim: similarity(caption, p.caption) })).sort((a, b) => b.sim - a.sim);
+    const ranked = labeled.map(p => ({ p, sim: wsim(caption, p.caption) })).sort((a, b) => b.sim - a.sim);
     if (ranked[0].sim - ranked[1].sim >= 0.2) {
       trace.push("fast path (closest)");
       return { post: ranked[0].p };
@@ -319,7 +341,7 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
   await onSlow?.();
   // Order for the AI: part-labeled first, then the most similar captions, then nearest in time
   const bySim = candidates.filter(c => !labeled.includes(c))
-    .map(c => ({ c, sim: similarity(caption, c.caption) }))
+    .map(c => ({ c, sim: wsim(caption, c.caption) }))
     .sort((a, b) => b.sim - a.sim).slice(0, 10).map(x => x.c);
   const ordered = [...new Set([...labeled, ...bySim, ...candidates])].slice(0, 20);
   // Captions like "Man" / "Smh" carry no info → go straight to watching the videos
