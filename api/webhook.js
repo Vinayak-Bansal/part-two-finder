@@ -251,8 +251,11 @@ export async function findPartTwo(payload, info, onSlow) {
     if (ai && ai !== "down") return { post: preferEarlier(ai, candidates, caption) };
   }
   // Video pass: watch the sent reel + the next few reels the creator posted
+  if (!original?.video) console.log(`No video URL for the sent reel (original ${original ? "found" : "not in list"})`);
   if (original?.video) {
     const nearest = [...candidates].sort((a, b) => a.takenAt - b.takenAt);
+    const withVid = candidates.filter(c => c.video).length;
+    console.log(`Video pass pool: ${withVid}/${candidates.length} candidates have a video URL; sent reel video: ${!!original.video}`);
     const pool = [...new Set([...labeled, ...nearest])].filter(c => c.video).slice(0, 6);
     const vid = await askGeminiVideo({ caption, video: original.video }, pool, want);
     if (vid && vid !== "down") return { post: preferEarlier(vid, candidates, caption) };
@@ -382,7 +385,8 @@ async function askGeminiVideo(sent, candidates, want) {
   candidates.forEach((c, i) => {
     if (candVids[i] && candVids[i].bytes <= budget) { budget -= candVids[i].bytes; kept.push({ c, v: candVids[i] }); }
   });
-  console.log(`Video pass: watching sent reel + ${kept.length} candidates (downloads ${Date.now() - t0}ms)`);
+  const sizes = candVids.map((v, i) => candidates[i].video ? (v ? Math.round(v.bytes / 1e5) / 10 + "MB" : "dl-fail/too-big") : "no-url");
+  console.log(`Video pass: watching sent reel (${Math.round(sentVid.bytes / 1e5) / 10}MB) + ${kept.length}/${candidates.length} candidates [${sizes.join(", ")}] (downloads ${Date.now() - t0}ms)`);
   if (!kept.length) return null;
   const parts = [
     { text: `You help people find the next part of an Instagram reel series. WATCH and LISTEN to each video ` +
