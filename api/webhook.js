@@ -281,7 +281,8 @@ const RULES = want =>
   `Signals: on-screen text like "Part ${want}"/"pt ${want}", the same people/characters/outfits/setting, the same specific subject, ` +
   `a recap of the sent reel, or the payoff of a cliffhanger ("wait until the end", "follow for part 2", "I'm going to try this" → later result/update/reveal).\n` +
   `Many follow-ups are NOT labeled "part ${want}". A different topic is NOT a match even if it says "part ${want}".\n` +
-  `Reply ONLY with JSON: {"matches": [<candidate numbers that continue it, or empty>], "confidence": <0-1>, "reason": "<short>"}`;
+  `Creators sometimes post parts out of order, so if a candidate explicitly shows or says "part ${want}" (cover, on-screen text or audio), that one wins over dates.\n` +
+  `Reply ONLY with JSON: {"labeled": <candidate number explicitly marked part ${want}, or null>, "matches": [<candidate numbers that continue it, or empty>], "confidence": <0-1>, "reason": "<short>"}`;
 
 // Call Gemini with fallbacks; returns parsed JSON, or "down" if every model failed
 async function callGemini(parts, timeoutMs = 20000) {
@@ -315,6 +316,7 @@ async function callGemini(parts, timeoutMs = 20000) {
 
 // If an EARLIER post covers the same subject about as closely as the AI's pick, that earlier one is the real part 2
 function preferEarlier(pick, candidates, caption) {
+  if (pick.explicit) return pick;
   const pickSim = similarity(caption, pick.caption);
   const earlier = candidates
     .filter(c => c.takenAt < pick.takenAt)
@@ -329,6 +331,10 @@ function preferEarlier(pick, candidates, caption) {
 function pickEarliest(out, candidates, label) {
   if (!out || out === "down") return out;
   console.log(`Gemini (${label}) says:`, JSON.stringify(out));
+  const lab = Number(out.labeled);
+  if (Number.isInteger(lab) && lab >= 1 && lab <= candidates.length) {
+    return { ...candidates[lab - 1], explicit: true }; // explicitly marked as the next part
+  }
   const nums = (Array.isArray(out.matches) ? out.matches : [out.match]).map(Number)
     .filter(i => Number.isInteger(i) && i >= 1 && i <= candidates.length);
   if (!nums.length || (out.confidence ?? 1) < 0.6) return null;

@@ -12,7 +12,7 @@ function buildPairs(username, posts) {
     if (!n) continue;
     const next = posts
       .filter(b => b.takenAt > a.takenAt && partNumber(b.caption) === n + 1 &&
-                   similarity(stripPart(a.caption), stripPart(b.caption)) >= 0.4)
+                   similarity(stripPart(a.caption), stripPart(b.caption)) >= 0.6)
       .sort((x, y) => x.takenAt - y.takenAt)[0];
     if (next) pairs.push({ username, sent: a, expected: next });
   }
