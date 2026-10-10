@@ -51,8 +51,9 @@ export async function GET(request) {
 
   // Run 3 at a time to stay under rate limits
   const results = [];
-  for (let i = 0; i < cases.length; i += 3) {
-    results.push(...(await Promise.all(cases.slice(i, i + 3).map(c => runCase(c.reel, c.expected, blind)))));
+  const par = Number(p.get("par") || 3);
+  for (let i = 0; i < cases.length; i += par) {
+    results.push(...(await Promise.all(cases.slice(i, i + par).map(c => runCase(c.reel, c.expected, blind)))));
   }
   // Infrastructure failures (rate limit, no data) aren't scored either way
   const INVALID = ["busy", "no_posts", "no_creator"];
