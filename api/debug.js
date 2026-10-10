@@ -20,6 +20,17 @@ export async function GET(request) {
   const t = `access_token=${FB_PAGE_TOKEN}`;
   const q = s => encodeURIComponent(s);
 
+  // ?alias=u1,u2,u3 : several creators in ONE request via field aliases
+  if (p.get("alias")) {
+    const users = p.get("alias").split(",");
+    const f = users.map((x, i) => `business_discovery.username(${x}).as(c${i}){username,media.limit(${p.get("lim") || 25}){caption,timestamp,permalink,media_type,media_url,thumbnail_url}}`).join(",");
+    const t0 = Date.now();
+    const r = await fetch(`${G}/${IG_BUSINESS_ID}?fields=${q(f)}&${t}`);
+    const b = await r.json();
+    const before = p.get("u0");
+    return Response.json({ ms: Date.now() - t0, usage: r.headers.get("x-app-usage"), error: b.error,
+      got: Object.fromEntries(Object.entries(b).filter(([k]) => k.startsWith("c")).map(([k, v]) => [k, { user: v.username, posts: v.media?.data?.length }])) });
+  }
   // ?cost=light|heavy&u=<user>&n=5 : compare Meta usage of lightweight vs full lookups
   if (p.get("cost")) {
     const fields = p.get("cost") === "light" ? "caption,timestamp,permalink,media_type" : "id,caption,timestamp,permalink,media_type,media_product_type,thumbnail_url,media_url";
@@ -37,7 +48,7 @@ export async function GET(request) {
     const r = await fetch(`https://graph.instagram.com/v23.0/me?fields=${q(`business_discovery.username(${p.get("igbd")}){username,media.limit(3){id,caption,timestamp,media_type,media_url,thumbnail_url,permalink}}`)}&access_token=${process.env.IG_TOKEN}`);
     return Response.json({ status: r.status, usage: r.headers.get("x-app-usage"), body: await r.json() });
   }
-  const results = p.get("tag") || p.get("search") || p.get("cost") ? [] : await Promise.all([
+  const results = p.get("tag") || p.get("search") || p.get("cost") || p.get("alias") ? [] : await Promise.all([
     call("token scopes", `${G}/debug_token?input_token=${FB_PAGE_TOKEN}&${t}`),
     call("page me", `${G}/me?fields=id,name&${t}`),
     call("ig account", `${G}/${IG_BUSINESS_ID}?fields=id,username&${t}`),
