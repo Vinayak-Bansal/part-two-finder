@@ -348,7 +348,7 @@ const LABEL = "part|pt|parte|episode|episodio|episódio|ep|chapter|cap[ií]tulo|
 const TEASER = new RegExp(
   `(?:(?:follow|wait|comment|subscribe|stay tuned|comenta|comente|segue|siga|sigue|sígueme|deja|escribe|commente|abonne)\\s+(?:for\\s+|to\\s+see\\s+|para\\s+|pra\\s+|por\\s+|pour\\s+)?(?:the\\s+|la\\s+|a\\s+)?(?:[A-Za-z"]+\\s+){0,3}` +
   `|(?:like|want|curte)\\s+(?:for|to\\s+see|para|pra)\\s+(?:the\\s+|a\\s+)?)\\(?(?:${LABEL})\\.?\\s*(${NUMW})\\b` +
-  `|\\b(?:${LABEL})\\.?\\s*(${NUMW})\\s*(?:coming|soon|tomorrow|next|dekhne|के\\s*लिए|ke\\s*liye|loading)`, "i");
+  `|\\b(?:${LABEL})\\.?\\s*(${NUMW})\\s*(?:is\\s+|will\\s+be\\s+|drops\\s+)?(?:in\\s+the\\s+|on\\s+the\\s+|out\\s+)?(?:coming|soon|tomorrow|next|dekhne|के\\s*लिए|ke\\s*liye|loading)`, "i");
 const MAIN = new RegExp(`(?:^|[^\\p{L}])(?:${LABEL})\\.?\\s*[-#:|]?\\s*(${NUMW})\\b|\\bp(\\d{1,2})\\b|\\b(\\d{1,2})\\s*\\/\\s*(\\d{1,2})\\b(?!\\s*(?:cups?|tsp|tbsp|oz|lb|kg|g)\\b)`, "iu");
 const NUMV = { one: 1, two: 2, dos: 2, dois: 2, three: 3, tres: 3, "três": 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 const toNum = v => NUMV[v.toLowerCase()] ?? parseInt(v, 10);
