@@ -20,12 +20,24 @@ export async function GET(request) {
   const t = `access_token=${FB_PAGE_TOKEN}`;
   const q = s => encodeURIComponent(s);
 
+  // ?cost=light|heavy&u=<user>&n=5 : compare Meta usage of lightweight vs full lookups
+  if (p.get("cost")) {
+    const fields = p.get("cost") === "light" ? "caption,timestamp,permalink,media_type" : "id,caption,timestamp,permalink,media_type,media_product_type,thumbnail_url,media_url";
+    const out = [];
+    for (let i = 0; i < Number(p.get("n") || 5); i++) {
+      const t0 = Date.now();
+      const r = await fetch(`${G}/${IG_BUSINESS_ID}?fields=${q(`business_discovery.username(${u}){media.limit(50){${fields}}}`)}&${t}`);
+      await r.json();
+      out.push({ ms: Date.now() - t0, usage: r.headers.get("x-app-usage") });
+    }
+    return Response.json({ cost: p.get("cost"), out });
+  }
   // ?igbd=<user> : can the Instagram-Login app's token do Business Discovery? (separate rate limit)
   if (p.get("igbd")) {
     const r = await fetch(`https://graph.instagram.com/v23.0/me?fields=${q(`business_discovery.username(${p.get("igbd")}){username,media.limit(3){id,caption,timestamp,media_type,media_url,thumbnail_url,permalink}}`)}&access_token=${process.env.IG_TOKEN}`);
     return Response.json({ status: r.status, usage: r.headers.get("x-app-usage"), body: await r.json() });
   }
-  const results = p.get("tag") || p.get("search") ? [] : await Promise.all([
+  const results = p.get("tag") || p.get("search") || p.get("cost") ? [] : await Promise.all([
     call("token scopes", `${G}/debug_token?input_token=${FB_PAGE_TOKEN}&${t}`),
     call("page me", `${G}/me?fields=id,name&${t}`),
     call("ig account", `${G}/${IG_BUSINESS_ID}?fields=id,username&${t}`),
