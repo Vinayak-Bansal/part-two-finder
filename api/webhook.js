@@ -505,7 +505,7 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
   let ai = null;
   // (if we can't watch the video, covers are all we have, so use them anyway)
   if (!vagueCaption || !original?.video) {
-    ai = await askGemini({ caption, thumb: original?.thumb || info.thumb }, ordered, want);
+    ai = await askGemini({ caption, thumb: original?.thumb || info.thumb, takenAt: after }, ordered, want);
     trace.push(`covers: ${ai === "down" ? "down" : ai?.shortcode || "none"}`);
     if (ai && ai !== "down") return { post: preferEarlier(ai, candidates, caption) };
   }
@@ -522,7 +522,7 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
     if (vid === "down" && (ai === "down" || vagueCaption)) return { reason: "ai_down" };
     // Covers were skipped (vague caption) and the videos didn't settle it: covers are the last try
     if (vagueCaption && ai === null) {
-      const last = await askGemini({ caption, thumb: original?.thumb || info.thumb }, ordered, want);
+      const last = await askGemini({ caption, thumb: original?.thumb || info.thumb, takenAt: after }, ordered, want);
       trace.push(`covers (last try): ${last === "down" ? "down" : last?.shortcode || "none"}`);
       if (last && last !== "down") return { post: preferEarlier(last, candidates, caption) };
     }
@@ -553,6 +553,9 @@ const RULES = want =>
   `Signals: on-screen text like "Part ${want}"/"pt ${want}", the same people/characters/outfits/setting, the same specific subject, ` +
   `a recap of the sent reel, or the payoff of a cliffhanger ("wait until the end", "follow for part 2", "I'm going to try this" → later result/update/reveal).\n` +
   `Many follow-ups are NOT labeled "part ${want}". A different topic is NOT a match even if it says "part ${want}".\n` +
+  `A reel posted soon after (minutes or hours) with nearly the same title about the same specific thing (same quiz, game, trip, place, person or story), ` +
+  `or framed as the next level/round/day/update/result, is usually the continuation even without a label. ` +
+  `Same general theme but a different specific place, person or story is NOT a continuation.\n` +
   `Creators sometimes post parts out of order, so if a candidate explicitly shows or says "part ${want}" (cover, on-screen text or audio), that one wins over dates.\n` +
   `Reply ONLY with JSON: {"labeled": <candidate number explicitly marked part ${want}, or null>, "matches": [<candidate numbers that continue it, or empty>], "confidence": <0-1>, "reason": "<short>"}`;
 
@@ -614,6 +617,8 @@ function pickEarliest(out, candidates, label) {
 }
 
 // Pass 1: covers + captions (fast)
+const ago = ms => ms < 3600e3 ? `${Math.max(1, Math.round(ms / 60e3))} min` : ms < 48 * 3600e3 ? `${Math.round(ms / 3600e3)} h` : `${Math.round(ms / 864e5)} days`;
+
 async function askGemini(sent, candidates, want) {
   const [sentImg, ...candImgs] = await Promise.all([sent.thumb, ...candidates.map(c => c.thumb)].map(imagePart));
   const parts = [
@@ -623,7 +628,8 @@ async function askGemini(sent, candidates, want) {
   if (sentImg) parts.push(sentImg);
   candidates.forEach((c, i) => {
     const date = new Date(c.takenAt).toISOString().slice(0, 10);
-    parts.push({ text: `CANDIDATE ${i + 1} (posted ${date}). Caption: ${JSON.stringify(c.caption.slice(0, 300))}` });
+    const gap = sent.takenAt ? ` — ${ago(c.takenAt - sent.takenAt)} after the sent reel` : "";
+    parts.push({ text: `CANDIDATE ${i + 1} (posted ${date}${gap}). Caption: ${JSON.stringify(c.caption.slice(0, 300))}` });
     if (candImgs[i]) parts.push(candImgs[i]);
   });
   // ~20 cover images take the full model a while; a short timeout pushed us onto the weaker "lite" model
