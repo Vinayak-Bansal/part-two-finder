@@ -637,7 +637,7 @@ const RULES = want =>
   `Reply ONLY with JSON: {"labeled": <candidate number explicitly marked part ${want}, or null>, "matches": [<candidate numbers that continue it, or empty>], "confidence": <0-1>, "reason": "<short>"}`;
 
 // Call Gemini with fallbacks; returns parsed JSON, or "down" if every model failed
-async function callGemini(parts, timeoutMs = 20000) {
+async function callGemini(parts, timeoutMs = 20000, extraConfig = null) {
   const models = [...new Set([GEMINI_MODEL, "gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"])];
   for (const model of models) {
     try {
@@ -647,16 +647,18 @@ async function callGemini(parts, timeoutMs = 20000) {
         signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
           contents: [{ role: "user", parts }],
-          generationConfig: { responseMimeType: "application/json", temperature: 0 },
+          generationConfig: { responseMimeType: "application/json", temperature: 0, ...(extraConfig || {}) },
         }),
       });
       const body = await res.json();
       if (res.ok) {
-        console.log("Gemini model used:", model);
+        console.log("Gemini model used:", model, "tokens:", body.usageMetadata?.promptTokenCount);
         const text = body.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
         return JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || "{}");
       }
       console.log(`Gemini error (${model}):`, res.status, JSON.stringify(body).slice(0, 200));
+      // If the model rejects the extra settings (e.g. low resolution), try again without them
+      if (res.status === 400 && extraConfig) return callGemini(parts, timeoutMs, null);
       if (![429, 500, 503, 404].includes(res.status)) return null;
       await new Promise(r => setTimeout(r, 800));
     } catch (e) {
@@ -788,7 +790,8 @@ async function askGeminiVideo(sent, candidates, want) {
     parts.push({ text: `CANDIDATE ${i + 1} (posted ${date}). Caption: ${JSON.stringify(c.caption.slice(0, 200))}` });
     parts.push(v.part);
   });
-  const out = await callGemini(parts, 60000);
+  // Low resolution: enough to recognize characters and scenes, ~4x cheaper than the default
+  const out = await callGemini(parts, 60000, { mediaResolution: "MEDIA_RESOLUTION_LOW" });
   console.log(`Video pass took ${Date.now() - t0}ms`);
   return pickEarliest(out, kept.map(k => k.c), "video");
 }
