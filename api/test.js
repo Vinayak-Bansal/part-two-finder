@@ -65,6 +65,8 @@ export async function GET(request) {
   const score = valid.filter(r => r.correct).length;
   // brief=1: only show details for wrong/invalid cases
   if (p.get("brief")) for (const r of results) if (r.correct) { delete r.trace; delete r.reel; }
+  // brief=1: only show details for wrong/invalid answers (keeps output small)
+  if (p.get("brief")) for (const r of results) if (r.correct) { delete r.trace; delete r.reel; }
   return Response.json({
     blind,
     score: `${score}/${valid.length}`,
