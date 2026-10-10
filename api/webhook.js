@@ -156,8 +156,11 @@ export async function getRecentPosts(username, sinceMs) {
     if (postCache.size > 200) postCache.delete(postCache.keys().next().value);
     // Save for other server instances too: personal accounts for a day, post lists for 3 hours
     // (video links from Instagram expire, so post lists can't be kept much longer)
-    const slim = { ...result, posts: result.posts.map(p => ({ ...p, caption: p.caption.slice(0, 600) })) };
-    await setJSON(`posts:${key}`, { sinceMs, result: slim }, result.personal ? 86400 : 3 * 3600);
+    // The database takes up to ~1MB per entry: trim captions, and drop the oldest posts if still too big
+    let posts = result.posts.map(p => ({ ...p, caption: p.caption.slice(0, 300) }));
+    while (posts.length && JSON.stringify(posts).length > 900000) posts = posts.slice(Math.ceil(posts.length * 0.2));
+    const keptSince = posts.length < result.posts.length ? posts[0]?.takenAt : sinceMs;
+    await setJSON(`posts:${key}`, { sinceMs: keptSince, result: { ...result, posts } }, result.personal ? 86400 : 3 * 3600);
   }
   return result;
 }
@@ -170,11 +173,14 @@ async function businessDiscovery(username, sinceMs) {
   const all = [];
   let after = null;
   let fields = BD_FIELDS_FULL;
-  // Page back until we pass the original reel's date (max 20 + 13×50 posts; only old reels need the deep pages)
-  for (let page = 0; page < 14; page++) {
+  // Page back until we pass the original reel's date (max 25 + 2×500 posts)
+  // Meta counts calls, not posts: one big page is far cheaper than many small ones.
+  // First a small page (most reels people send are recent), then up to 2 pages of 500.
+  let big = 500;
+  for (let page = 0; page < 3; page++) {
     // Small first page (most reels people send are recent); bigger pages only if we need to go back further.
     // Meta rate-limits this API by call count AND processing time, so don't over-fetch.
-    const media = `media${after ? `.after(${after})` : ""}.limit(${page ? 50 : 20}){${fields}}`;
+    const media = `media${after ? `.after(${after})` : ""}.limit(${page ? big : 25}){${fields}}`;
     const url =
       `https://graph.facebook.com/v23.0/${IG_BUSINESS_ID}` +
       `?fields=${encodeURIComponent(`business_discovery.username(${username}){${media}}`)}` +
@@ -184,6 +190,12 @@ async function businessDiscovery(username, sinceMs) {
     lastUsage = res.headers.get("x-app-usage");
     if (data.error) {
       // Retry once with fewer fields in case some aren't allowed
+      if (page && big > 100 && /reduce the amount of data/i.test(data.error.message || "")) {
+        console.log("Business Discovery: page too big, retrying with 100");
+        big = 100;
+        page--;
+        continue;
+      }
       if (fields === BD_FIELDS_FULL && data.error.code === 100) {
         console.log("Business Discovery: retrying with fewer fields:", data.error.message);
         fields = BD_FIELDS_MIN;
