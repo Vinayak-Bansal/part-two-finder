@@ -6,6 +6,30 @@ const { VERIFY_TOKEN, IG_TOKEN, APP_SECRET, GEMINI_API_KEY } = process.env;
 const { FB_PAGE_TOKEN, IG_BUSINESS_ID } = process.env;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 
+// ---------- Memory (Upstash Redis via Vercel) ----------
+// Remembers answers per reel, creators' post lists for a few hours, and a log of every result.
+// If the database isn't set up or is down, everything still works, just without memory.
+const { KV_REST_API_URL, KV_REST_API_TOKEN } = process.env;
+export async function redis(...cmd) {
+  if (!KV_REST_API_URL || !KV_REST_API_TOKEN) return null;
+  try {
+    const res = await fetch(KV_REST_API_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${KV_REST_API_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify(cmd),
+      signal: AbortSignal.timeout(3000),
+    });
+    const body = await res.json();
+    if (body.error) { console.log("Redis error:", body.error); return null; }
+    return body.result;
+  } catch (e) {
+    console.log("Redis unavailable:", e.message);
+    return null;
+  }
+}
+const getJSON = async key => { const v = await redis("GET", key); try { return v ? JSON.parse(v) : null; } catch { return null; } };
+const setJSON = (key, value, ttlSec) => redis("SET", key, JSON.stringify(value), "EX", String(ttlSec));
+
 // Meta calls this once when you click "Verify and save"
 export function GET(request) {
   const p = new URL(request.url).searchParams;
@@ -51,15 +75,43 @@ async function handleEvents(body) {
 }
 
 // The reply for a shared reel (exported so the test endpoint can check the exact DM text)
+// How long to remember each kind of answer (seconds). Unsure answers aren't remembered long,
+// because part 2 may come out later.
+const ANSWER_TTL = { found: 180 * 86400, personal: 86400, too_old: 86400, not_out: 1800, no_match: 3600 };
+
 export async function buildReply(payload, onSlow) {
+  const t0 = Date.now();
   console.log("Reel received:", JSON.stringify(payload));
-  const info = await getCreator(payload.url); // { username, postedAt }
-  console.log("Creator:", JSON.stringify(info));
-  if (!info?.username) return "Couldn't open this reel (it might be age-restricted or private). Try a different one.";
-  const { post, reason } = await findPartTwo(payload, info, onSlow);
-  console.log("Result:", post?.shortcode || reason);
-  const u = `@${info.username}`;
-  if (post) return `Here's part 2: https://www.instagram.com/reel/${post.shortcode}/`;
+  const code = payload.url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
+  let answer = code ? await getJSON(`ans:${code}`) : null;
+  if (answer) {
+    console.log("Remembered answer:", JSON.stringify(answer));
+  } else {
+    const info = await getCreator(payload.url); // { username, postedAt }
+    console.log("Creator:", JSON.stringify(info));
+    if (!info?.username) {
+      await logResult({ code, result: "no_creator", ms: Date.now() - t0 });
+      return "Couldn't open this reel (it might be age-restricted or private). Try a different one.";
+    }
+    const { post, reason } = await findPartTwo(payload, info, onSlow);
+    answer = { user: info.username, post: post?.shortcode || null, reason: post ? "found" : reason };
+    const ttl = ANSWER_TTL[answer.reason];
+    if (code && ttl) await setJSON(`ans:${code}`, answer, ttl);
+  }
+  console.log("Result:", answer.post || answer.reason);
+  await logResult({ code, user: answer.user, result: answer.reason, post: answer.post, ms: Date.now() - t0 });
+  return replyText(answer.user, answer.post, answer.reason);
+}
+
+// Keep the last 5,000 results so we can see how the bot is doing
+async function logResult(entry) {
+  await redis("LPUSH", "log", JSON.stringify({ t: new Date().toISOString(), ...entry }));
+  await redis("LTRIM", "log", "0", "4999");
+}
+
+function replyText(username, post, reason) {
+  const u = `@${username}`;
+  if (post) return `Here's part 2: https://www.instagram.com/reel/${post}/`;
   return {
     personal: `${u} is a personal account, so I can't see their other reels. Check their page for part 2.`,
     not_out: `${u} hasn't posted anything since this reel, so part 2 isn't out yet.`,
@@ -85,6 +137,12 @@ export async function getRecentPosts(username, sinceMs) {
     console.log(`Post cache hit for @${username}`);
     return hit.result;
   }
+  const saved = await getJSON(`posts:${key}`);
+  if (saved && (!sinceMs || !saved.sinceMs || saved.sinceMs <= sinceMs)) {
+    console.log(`Saved post list hit for @${username}`);
+    postCache.set(key, { at: Date.now(), sinceMs: saved.sinceMs, result: saved.result });
+    return saved.result;
+  }
   let result;
   if (FB_PAGE_TOKEN && IG_BUSINESS_ID) {
     const posts = await businessDiscovery(username, sinceMs);
@@ -96,6 +154,10 @@ export async function getRecentPosts(username, sinceMs) {
   if (result.personal || result.posts.length) {
     postCache.set(key, { at: Date.now(), sinceMs, result });
     if (postCache.size > 200) postCache.delete(postCache.keys().next().value);
+    // Save for other server instances too: personal accounts for a day, post lists for 3 hours
+    // (video links from Instagram expire, so post lists can't be kept much longer)
+    const slim = { ...result, posts: result.posts.map(p => ({ ...p, caption: p.caption.slice(0, 600) })) };
+    await setJSON(`posts:${key}`, { sinceMs, result: slim }, result.personal ? 86400 : 3 * 3600);
   }
   return result;
 }

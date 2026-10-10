@@ -1,6 +1,6 @@
 // Private accuracy test: /api/test?key=<VERIFY_TOKEN>&cases=<reelURL>><part2URL or none>|<reelURL>><...>
 // Runs the real finder on each reel (no DMs sent) and scores it against the known answer.
-import { getCreator, findPartTwo, getRecentPosts, buildReply } from "./webhook.js";
+import { getCreator, findPartTwo, getRecentPosts, buildReply, redis } from "./webhook.js";
 
 const { VERIFY_TOKEN } = process.env;
 const code = u => u?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1] || null;
@@ -21,6 +21,13 @@ export async function GET(request) {
   const p = new URL(request.url).searchParams;
   if (![VERIFY_TOKEN, process.env.TEST_KEY].filter(Boolean).includes(p.get("key"))) return new Response("Forbidden", { status: 403 });
   const blind = p.get("blind") === "1";
+  // ?stats=1 : how the bot has been doing (from the saved result log)
+  if (p.get("stats")) {
+    const rows = ((await redis("LRANGE", "log", "0", String(Number(p.get("n") || 500) - 1))) || []).map(r => JSON.parse(r));
+    const counts = {};
+    for (const r of rows) counts[r.result] = (counts[r.result] || 0) + 1;
+    return Response.json({ total: rows.length, counts, recent: rows.slice(0, Number(p.get("show") || 20)) });
+  }
   // ?dm=<shortcode>&title=<caption> : the exact DM reply the bot would send (nothing is sent)
   if (p.get("dm")) {
     const t0 = Date.now();
