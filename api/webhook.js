@@ -449,8 +449,10 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
   if (!caption && original?.caption) caption = original.caption;
   const after = original?.takenAt ?? postedAt ?? 0;
   // Creators sometimes re-upload the same reel: an identical caption posted later is a copy, not part 2
-  const sentRaw = (original?.raw ?? original?.caption ?? payload.title ?? "").trim();
-  const isCopy = p => sentRaw.length >= 15 && (p.raw ?? p.caption).trim() === sentRaw;
+  // (compared without hashtags, which creators shuffle between uploads)
+  const norm = t => (t || "").replace(/[#@][\p{L}\p{N}_.]+/gu, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  const sentRaw = norm(original?.raw ?? original?.caption ?? payload.title);
+  const isCopy = p => sentRaw.length >= 15 && norm(p.raw ?? p.caption) === sentRaw;
   const candidates = posts.filter(p => p.shortcode !== code && p.takenAt > after && !isCopy(p));
   trace.push(`${posts.length} posts, ${candidates.length} after sent reel, original ${original ? "found" : "missing"}${original?.video ? " +video" : ""}`);
   if (!candidates.length) return { reason: "not_out" };
