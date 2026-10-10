@@ -107,8 +107,8 @@ async function businessDiscovery(username, sinceMs) {
   const all = [];
   let after = null;
   let fields = BD_FIELDS_FULL;
-  // Page back until we pass the original reel's date (max 20 + 5×50 posts)
-  for (let page = 0; page < 6; page++) {
+  // Page back until we pass the original reel's date (max 20 + 9×50 posts; only old reels need the deep pages)
+  for (let page = 0; page < 10; page++) {
     // Small first page (most reels people send are recent); bigger pages only if we need to go back further.
     // Meta rate-limits this API by call count AND processing time, so don't over-fetch.
     const media = `media${after ? `.after(${after})` : ""}.limit(${page ? 50 : 20}){${fields}}`;
