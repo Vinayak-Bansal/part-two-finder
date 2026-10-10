@@ -180,14 +180,19 @@ async function businessDiscovery(username, sinceMs) {
   for (let page = 0; page < 3; page++) {
     // Small first page (most reels people send are recent); bigger pages only if we need to go back further.
     // Meta rate-limits this API by call count AND processing time, so don't over-fetch.
-    const media = `media${after ? `.after(${after})` : ""}.limit(${page ? big : 25}){${fields}}`;
-    const url =
-      `https://graph.facebook.com/v23.0/${IG_BUSINESS_ID}` +
-      `?fields=${encodeURIComponent(`business_discovery.username(${username}){${media}}`)}` +
-      `&access_token=${FB_PAGE_TOKEN}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    lastUsage = res.headers.get("x-app-usage");
+    let data, res = null;
+    // First page: shared with other people's lookups happening at the same moment (see groupedFirstPage)
+    if (page === 0 && fields === BD_FIELDS_FULL) data = await groupedFirstPage(username).catch(e => { console.log("Grouping error:", e.message); return null; });
+    if (!data) {
+      const media = `media${after ? `.after(${after})` : ""}.limit(${page ? big : FIRST_PAGE}){${fields}}`;
+      const url =
+        `https://graph.facebook.com/v23.0/${IG_BUSINESS_ID}` +
+        `?fields=${encodeURIComponent(`business_discovery.username(${username}){${media}}`)}` +
+        `&access_token=${FB_PAGE_TOKEN}`;
+      res = await fetch(url);
+      data = await res.json();
+      lastUsage = res.headers.get("x-app-usage");
+    }
     if (data.error) {
       // Retry once with fewer fields in case some aren't allowed
       if (page && big > 100 && /reduce the amount of data/i.test(data.error.message || "")) {
@@ -203,7 +208,7 @@ async function businessDiscovery(username, sinceMs) {
         continue;
       }
       console.log("Business Discovery failed:", JSON.stringify(data.error).slice(0, 300),
-        "usage:", res.headers.get("x-app-usage"), res.headers.get("x-business-use-case-usage")?.slice(0, 300));
+        "usage:", lastUsage);
       if (data.error.code === 110) return "not_found"; // personal (non-creator) account
       // Token blocked/expired (e.g. Facebook security checkpoint on the account): we can't look anything up
       if (data.error.code === 190) { console.error("FB TOKEN PROBLEM - log in to facebook.com:", data.error.message); return "rate_limited"; }
@@ -232,6 +237,76 @@ async function businessDiscovery(username, sinceMs) {
   }
   console.log(`Business Discovery: ${all.length} posts for @${username}`, "usage:", lastUsage);
   return all.sort((a, b) => a.takenAt - b.takenAt); // oldest → newest
+}
+
+
+// ---------- Grouped lookups ----------
+// Meta counts one request against the hourly limit no matter how many creators it asks about
+// (using field aliases). So when several DMs arrive at about the same time, one of them fetches
+// everyone's creators in a single request. Coordinated through the database; if anything goes
+// wrong, each DM just does its own normal lookup.
+const FIRST_PAGE = 25;
+const GROUP_WAIT_MS = 1000;
+const GROUP_MAX = Number(process.env.GROUP_MAX || 10);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function groupedFirstPage(username) {
+  if (!KV_REST_API_URL) return null;
+  const id = `${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+  if (!(await redis("RPUSH", "bdq", JSON.stringify({ id, u: username })))) return null;
+  await sleep(GROUP_WAIT_MS);
+  const deadline = Date.now() + 12000;
+  while (Date.now() < deadline) {
+    const mine = await getJSON(`bdr:${id}`);
+    if (mine) return mine.fallback ? null : mine;
+    if ((await redis("SET", "bdlock", id, "NX", "PX", "20000")) === "OK") {
+      try { await leadGroups(); } finally { if ((await redis("GET", "bdlock")) === id) await redis("DEL", "bdlock"); }
+      continue;
+    }
+    await sleep(300);
+  }
+  console.log("Grouped lookup timed out, doing it directly");
+  return null;
+}
+
+async function leadGroups() {
+  for (let round = 0; round < 5; round++) {
+    const items = ((await redis("LPOP", "bdq", String(GROUP_MAX))) || []).map(x => JSON.parse(x));
+    if (!items.length) return;
+    const results = await fetchGroup([...new Set(items.map(i => i.u.toLowerCase()))]);
+    await Promise.all(items.map(i => setJSON(`bdr:${i.id}`, results[i.u.toLowerCase()] || { fallback: true }, 60)));
+  }
+}
+
+// One request for several creators' latest posts. Returns { username: {business_discovery} | {error} }
+async function fetchGroup(users) {
+  const out = {};
+  let left = [...users];
+  const L = "abcdefghijklmnopqrstuvwxyz";
+  for (let attempt = 0; attempt < users.length && left.length; attempt++) {
+    const alias = i => `g${L[Math.floor(i / 26)]}${L[i % 26]}`;
+    const f = left.map((u, i) => `business_discovery.username(${u}).as(${alias(i)}){media.limit(${FIRST_PAGE}){${BD_FIELDS_FULL}}}`).join(",");
+    const res = await fetch(`https://graph.facebook.com/v23.0/${IG_BUSINESS_ID}?fields=${encodeURIComponent(f)}&access_token=${FB_PAGE_TOKEN}`);
+    const data = await res.json();
+    lastUsage = res.headers.get("x-app-usage");
+    if (!data.error) {
+      left.forEach((u, i) => { out[u] = { business_discovery: data[alias(i)] }; });
+      console.log(`Grouped lookup: ${left.length} creators in 1 request (attempt ${attempt + 1})`, "usage:", lastUsage);
+      return out;
+    }
+    // One personal account fails the whole request, but Meta names it: drop it and retry the rest
+    const bad = data.error.code === 110 && (data.error.error_user_msg || "").match(/username: (\S+?) cannot be found/)?.[1]?.toLowerCase();
+    if (bad && left.includes(bad)) {
+      out[bad] = { error: data.error };
+      left = left.filter(u => u !== bad);
+      continue;
+    }
+    // Rate limit / blocked token: everyone gets the same error. Anything else: everyone looks up on their own.
+    if ([4, 17, 32, 613, 190].includes(data.error.code)) left.forEach(u => { out[u] = { error: data.error }; });
+    console.log("Grouped lookup failed:", JSON.stringify(data.error).slice(0, 200));
+    return out;
+  }
+  return out;
 }
 
 // Public web endpoint (no login; ~12 latest). Instagram often blocks this from servers.
