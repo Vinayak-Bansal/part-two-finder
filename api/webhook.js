@@ -584,7 +584,18 @@ const PATTERNS = [
 ];
 
 // Find the creator's username from the reel's public pages (free, no API)
+// Instagram sometimes refuses page fetches for a moment, so try a few rounds before giving up
 export async function getCreator(url) {
+  for (let round = 0; round < 3; round++) {
+    const info = await getCreatorOnce(url);
+    if (info?.username || !url) return info;
+    console.log(`Creator lookup round ${round + 1} failed, retrying`);
+    await new Promise(r => setTimeout(r, 1500 * (round + 1)));
+  }
+  return null;
+}
+
+async function getCreatorOnce(url) {
   const code = url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
   if (!code) return null;
 
