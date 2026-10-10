@@ -438,7 +438,7 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
   if (busy) return { reason: "busy" };
   // Benchmark "blind" mode: hide "part N" labels from captions so the bot must use covers/video
   if (info.blind) {
-    posts = posts.map(p => ({ ...p, caption: stripPart(p.caption) }));
+    posts = posts.map(p => ({ ...p, raw: p.caption, caption: stripPart(p.caption) }));
     caption = stripPart(caption);
   }
   if (personal) return { reason: "personal" };
@@ -448,7 +448,10 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
   const original = posts.find(p => p.shortcode === code);
   if (!caption && original?.caption) caption = original.caption;
   const after = original?.takenAt ?? postedAt ?? 0;
-  const candidates = posts.filter(p => p.shortcode !== code && p.takenAt > after);
+  // Creators sometimes re-upload the same reel: an identical caption posted later is a copy, not part 2
+  const sentRaw = (original?.raw ?? original?.caption ?? payload.title ?? "").trim();
+  const isCopy = p => sentRaw.length >= 15 && (p.raw ?? p.caption).trim() === sentRaw;
+  const candidates = posts.filter(p => p.shortcode !== code && p.takenAt > after && !isCopy(p));
   trace.push(`${posts.length} posts, ${candidates.length} after sent reel, original ${original ? "found" : "missing"}${original?.video ? " +video" : ""}`);
   if (!candidates.length) return { reason: "not_out" };
 
