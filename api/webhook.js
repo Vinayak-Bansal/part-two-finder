@@ -180,18 +180,15 @@ async function logResult(entry) {
 }
 
 function replyText(username, post, reason) {
-  // Instagram turns "@juicebox.ai" into a link preview for the website juicebox.ai, so names with a dot
-  // aren't written as @mentions. Instead we link the creator's Instagram page (which previews their profile).
-  const u = username?.includes(".") ? "This creator" : `@${username}`;
-  const page = `https://www.instagram.com/${username}/`;
+  // Plain text only (no usernames or links): Instagram turns names like "@juicebox.ai" into website previews.
   if (post) return `Here's part 2: https://www.instagram.com/reel/${post}/`;
   return {
-    personal: `${u} is a personal account, so I can't see their other reels. Check their page for part 2: ${page}`,
-    not_out: `${u} hasn't posted anything since this reel, so part 2 isn't out yet.`,
+    personal: `This creator has a personal account, so I can't see their other reels.`,
+    not_out: `Part 2 isn't out yet. The creator hasn't posted anything since this reel.`,
     ai_down: `I'm a bit overloaded right now. Send the reel again in a minute.`,
     busy: `I'm getting a lot of requests right now. Send the reel again in a few minutes.`,
-    too_old: `${u} posts so much that this reel is too far back for me to search. Check their page for part 2: ${page}`,
-  }[reason] || `Couldn't find part 2 yet, it might not be out. Check their page: ${page}`;
+    too_old: `This reel is too old for me to search. Check the creator's page for part 2.`,
+  }[reason] || `Couldn't find part 2. It might not be out yet.`;
 }
 
 // ---------- Part 2 finder ----------
