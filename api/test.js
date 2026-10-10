@@ -1,6 +1,6 @@
 // Private accuracy test: /api/test?key=<VERIFY_TOKEN>&cases=<reelURL>><part2URL or none>|<reelURL>><...>
 // Runs the real finder on each reel (no DMs sent) and scores it against the known answer.
-import { getCreator, findPartTwo, getRecentPosts, buildReply, redis } from "./webhook.js";
+import { getCreator, findPartTwo, getRecentPosts, buildReply, redis, handleReel, drainPending, testHooks } from "./webhook.js";
 
 const { VERIFY_TOKEN } = process.env;
 const code = u => u?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1] || null;
@@ -21,6 +21,20 @@ export async function GET(request) {
   const p = new URL(request.url).searchParams;
   if (![VERIFY_TOKEN, process.env.TEST_KEY].filter(Boolean).includes(p.get("key"))) return new Response("Forbidden", { status: 403 });
   const blind = p.get("blind") === "1";
+  // ?simbusy=<shortcode>&times=N : pretend Meta is busy for the first N attempts and show the DMs the
+  // person would get (sent to a fake TEST id, nothing really sent). times>=3 also tests parking + draining.
+  if (p.get("simbusy")) {
+    testHooks.forceBusy = Number(p.get("times") || 1);
+    testHooks.waits = [2000, 2000];
+    testHooks.sent = [];
+    const t0 = Date.now();
+    await handleReel("TEST1", { url: `https://www.instagram.com/reel/${p.get("simbusy")}/` });
+    const afterRetries = [...testHooks.sent];
+    await drainPending(5);
+    const out = { afterRetries, afterDrain: testHooks.sent.slice(afterRetries.length), ms: Date.now() - t0 };
+    testHooks.forceBusy = 0; testHooks.waits = null; testHooks.sent = null;
+    return Response.json(out);
+  }
   // ?stats=1 : how the bot has been doing (from the saved result log)
   if (p.get("stats")) {
     const rows = ((await redis("LRANGE", "log", "0", String(Number(p.get("n") || 500) - 1))) || []).map(r => JSON.parse(r));

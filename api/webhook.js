@@ -65,14 +65,47 @@ async function handleEvents(body) {
 
       const senderId = event.sender.id;
       const reel = (msg.attachments || []).find(a => a.type === "ig_reel" || a.type === "share");
-
-      const reply = reel
-        ? await buildReply(reel.payload, () => sendText(senderId, "Looking for part 2..."))
-        : "Send me a reel and I'll find part 2.";
-      await sendText(senderId, reply);
+      if (!reel) { await sendText(senderId, "Send me a reel and I'll find part 2."); continue; }
+      await handleReel(senderId, reel.payload);
     }
   }
+  await drainPending(2);
 }
+
+// When we're too busy (Meta's hourly limit) or the AI is down: tell the person we'll get back to
+// them, retry a couple of times over the next few minutes, then park it for later webhooks to finish.
+const RETRYABLE = new Set(["busy", "ai_down"]);
+export async function handleReel(senderId, payload) {
+  let { text, reason } = await answerReel(payload, () => sendText(senderId, "Looking for part 2..."));
+  if (!RETRYABLE.has(reason)) return sendText(senderId, text);
+  await sendText(senderId, "Lots of people are using me right now. I'll send you part 2 in a few minutes.");
+  for (const wait of testHooks.waits || [60e3, 90e3]) {
+    await sleep(wait);
+    ({ text, reason } = await answerReel(payload, null));
+    if (!RETRYABLE.has(reason)) return sendText(senderId, text);
+  }
+  await redis("RPUSH", "pending", JSON.stringify({ senderId, payload, at: Date.now() }));
+  console.log("Parked for later:", senderId, payload.url);
+}
+
+// Finish a few parked requests whenever the bot is woken up by a new message
+export async function drainPending(max) {
+  for (let i = 0; i < max; i++) {
+    const raw = await redis("LPOP", "pending");
+    if (!raw) return;
+    const item = JSON.parse(raw);
+    if (Date.now() - item.at > 6 * 3600e3) {
+      await sendText(item.senderId, "Sorry, I couldn't get to your reel in time. Send it again and I'll look now.");
+      continue;
+    }
+    const { text, reason } = await answerReel(item.payload, null);
+    if (RETRYABLE.has(reason)) { await redis("RPUSH", "pending", raw); return; } // still busy: try again later
+    await sendText(item.senderId, text);
+  }
+}
+
+// Test-only switches (used by /api/test to simulate a busy period without sending real DMs)
+export const testHooks = { forceBusy: 0, waits: null, sent: null };
 
 // The reply for a shared reel (exported so the test endpoint can check the exact DM text)
 // How long to remember each kind of answer (seconds). Unsure answers aren't remembered long,
@@ -80,6 +113,10 @@ async function handleEvents(body) {
 const ANSWER_TTL = { found: 180 * 86400, personal: 86400, too_old: 86400, not_out: 1800, no_match: 3600 };
 
 export async function buildReply(payload, onSlow) {
+  return (await answerReel(payload, onSlow)).text;
+}
+
+export async function answerReel(payload, onSlow) {
   const t0 = Date.now();
   console.log("Reel received:", JSON.stringify(payload));
   const code = payload.url?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1];
@@ -91,8 +128,9 @@ export async function buildReply(payload, onSlow) {
     console.log("Creator:", JSON.stringify(info));
     if (!info?.username) {
       await logResult({ code, result: "no_creator", ms: Date.now() - t0 });
-      return "Couldn't open this reel (it might be age-restricted or private). Try a different one.";
+      return { reason: "no_creator", text: "Couldn't open this reel (it might be age-restricted or private). Try a different one." };
     }
+    if (testHooks.forceBusy > 0) { testHooks.forceBusy--; return { reason: "busy", text: replyText(info.username, null, "busy") }; }
     const { post, reason } = await findPartTwo(payload, info, onSlow);
     answer = { user: info.username, post: post?.shortcode || null, reason: post ? "found" : reason };
     const ttl = ANSWER_TTL[answer.reason];
@@ -100,7 +138,7 @@ export async function buildReply(payload, onSlow) {
   }
   console.log("Result:", answer.post || answer.reason);
   await logResult({ code, user: answer.user, result: answer.reason, post: answer.post, ms: Date.now() - t0 });
-  return replyText(answer.user, answer.post, answer.reason);
+  return { reason: answer.reason, text: replyText(answer.user, answer.post, answer.reason) };
 }
 
 // Keep the last 5,000 results so we can see how the bot is doing
@@ -800,6 +838,7 @@ async function getCreatorOnce(url) {
 }
 
 async function sendText(recipientId, text) {
+  if (String(recipientId).startsWith("TEST")) { testHooks.sent?.push({ to: recipientId, text }); return; }
   const res = await fetch(`${GRAPH}/me/messages`, {
     method: "POST",
     headers: { Authorization: `Bearer ${IG_TOKEN}`, "Content-Type": "application/json" },
