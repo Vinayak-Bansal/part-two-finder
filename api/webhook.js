@@ -65,6 +65,7 @@ export async function buildReply(payload, onSlow) {
     not_out: `${u} hasn't posted anything since this reel, so part 2 isn't out yet.`,
     ai_down: `I'm a bit overloaded right now. Send the reel again in a minute.`,
     busy: `I'm getting a lot of requests right now. Send the reel again in a few minutes.`,
+    too_old: `${u} posts so much that this reel is too far back for me to search. Check their page for part 2.`,
   }[reason] || `Couldn't find part 2 yet. Check ${u}'s page, it might not be out yet.`;
 }
 
@@ -107,8 +108,8 @@ async function businessDiscovery(username, sinceMs) {
   const all = [];
   let after = null;
   let fields = BD_FIELDS_FULL;
-  // Page back until we pass the original reel's date (max 20 + 9×50 posts; only old reels need the deep pages)
-  for (let page = 0; page < 10; page++) {
+  // Page back until we pass the original reel's date (max 20 + 13×50 posts; only old reels need the deep pages)
+  for (let page = 0; page < 14; page++) {
     // Small first page (most reels people send are recent); bigger pages only if we need to go back further.
     // Meta rate-limits this API by call count AND processing time, so don't over-fetch.
     const media = `media${after ? `.after(${after})` : ""}.limit(${page ? 50 : 20}){${fields}}`;
@@ -378,6 +379,9 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
   } else if (ai === "down") {
     return { reason: "ai_down" };
   }
+  // We never got back as far as the sent reel (creator posts a lot): say so instead of a vague "not found"
+  const oldest = posts.length ? Math.min(...posts.map(p => p.takenAt)) : 0;
+  if (!original && postedAt && oldest > postedAt) return { reason: "too_old" };
   return { reason: "no_match" };
 }
 
