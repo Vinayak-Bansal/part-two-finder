@@ -522,7 +522,12 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
   // (compared without hashtags, which creators shuffle between uploads)
   const norm = t => (t || "").replace(/[#@][\p{L}\p{N}_.]+/gu, " ").replace(/\s+/g, " ").trim().toLowerCase();
   const sentRaw = norm(original?.raw ?? original?.caption ?? payload.title);
-  const isCopy = p => sentRaw.length >= 15 && norm(p.raw ?? p.caption) === sentRaw;
+  // Some creators paste the SAME caption on every post (and reuse one cover). Then captions/covers tell
+  // us nothing, identical captions don't mean re-uploads, and only watching the videos can match the story.
+  const sameCaption = sentRaw.length >= 15 ? posts.filter(p => norm(p.raw ?? p.caption) === sentRaw).length : 0;
+  const templated = sameCaption >= 3;
+  if (templated) trace.push(`templated caption (${sameCaption} posts share it)`);
+  const isCopy = p => !templated && sentRaw.length >= 15 && norm(p.raw ?? p.caption) === sentRaw;
   const candidates = posts.filter(p => p.shortcode !== code && p.takenAt > after && !isCopy(p));
   trace.push(`${posts.length} posts, ${candidates.length} after sent reel, original ${original ? "found" : "missing"}${original?.video ? " +video" : ""}`);
   if (!candidates.length) return { reason: "not_out" };
@@ -576,7 +581,7 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
     .sort((a, b) => b.sim - a.sim).slice(0, 10).map(x => x.c);
   const ordered = [...new Set([...labeled, ...bySim, ...candidates])].slice(0, 20);
   // Captions like "Man" / "Smh" carry no info → go straight to watching the videos
-  const vagueCaption = words(caption).size < 4;
+  const vagueCaption = words(caption).size < 4 || templated;
   let ai = null;
   // (if we can't watch the video, covers are all we have, so use them anyway)
   if (!vagueCaption || !original?.video) {
@@ -591,7 +596,7 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
     const withVid = candidates.filter(c => c.video).length;
     console.log(`Video pass pool: ${withVid}/${candidates.length} candidates have a video URL; sent reel video: ${!!original.video}`);
     const pool = [...new Set([...labeled, ...nearest])].filter(c => c.video).slice(0, 6);
-    const vid = await askGeminiVideo({ caption, video: original.video }, pool, want);
+    const vid = await askGeminiVideo({ caption, video: original.video, takenAt: after }, pool, want);
     trace.push(`video(${pool.length}): ${vid === "down" ? "down" : vid?.shortcode || "none"}`);
     if (vid && vid !== "down") return { post: preferEarlier(vid, candidates, caption) };
     if (vid === "down" && (ai === "down" || vagueCaption)) return { reason: "ai_down" };
@@ -780,14 +785,17 @@ async function askGeminiVideo(sent, candidates, want) {
   console.log(`Video pass: watching sent reel (${Math.round(sentVid.bytes / 1e5) / 10}MB) + ${kept.length}/${candidates.length} candidates [${sizes.join(", ")}] (downloads ${Date.now() - t0}ms)`);
   if (!kept.length) return null;
   const parts = [
-    { text: `You help people find the next part of an Instagram reel series. WATCH and LISTEN to each video ` +
+    { text: `You help people find the next part of an Instagram reel series. Some creators reuse the same caption and ` +
+      `background footage (gameplay, satisfying clips) on every reel and post parts of different stories in between, so ` +
+      `ignore captions and backgrounds when they're identical and match the actual story being told. WATCH and LISTEN to each video ` +
             `(on-screen text, spoken words, people, setting, storyline).\nThe user sent the first video. The others were posted AFTER it by the same creator.\n` + RULES(want) },
     { text: `SENT REEL. Caption: ${JSON.stringify(sent.caption.slice(0, 300))}` },
     sentVid.part,
   ];
   kept.forEach(({ c, v }, i) => {
     const date = new Date(c.takenAt).toISOString().slice(0, 10);
-    parts.push({ text: `CANDIDATE ${i + 1} (posted ${date}). Caption: ${JSON.stringify(c.caption.slice(0, 200))}` });
+    const gap = sent.takenAt ? ` — ${ago(c.takenAt - sent.takenAt)} after the sent reel` : "";
+    parts.push({ text: `CANDIDATE ${i + 1} (posted ${date}${gap}). Caption: ${JSON.stringify(c.caption.slice(0, 200))}` });
     parts.push(v.part);
   });
   // Low resolution: enough to recognize characters and scenes, ~4x cheaper than the default
