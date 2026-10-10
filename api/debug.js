@@ -26,9 +26,9 @@ export async function GET(request) {
     const out = [];
     for (let i = 0; i < Number(p.get("n") || 5); i++) {
       const t0 = Date.now();
-      const r = await fetch(`${G}/${IG_BUSINESS_ID}?fields=${q(`business_discovery.username(${u}){media.limit(50){${fields}}}`)}&${t}`);
-      await r.json();
-      out.push({ ms: Date.now() - t0, usage: r.headers.get("x-app-usage") });
+      const r = await fetch(`${G}/${IG_BUSINESS_ID}?fields=${q(`business_discovery.username(${u}){media.limit(${p.get("lim") || 50}){${fields}}}`)}&${t}`);
+      const b = await r.json();
+      out.push({ ms: Date.now() - t0, n: b.business_discovery?.media?.data?.length, err: b.error?.message, usage: r.headers.get("x-app-usage") });
     }
     return Response.json({ cost: p.get("cost"), out });
   }
