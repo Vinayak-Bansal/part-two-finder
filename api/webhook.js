@@ -555,7 +555,9 @@ const RULES = want =>
   `Many follow-ups are NOT labeled "part ${want}". A different topic is NOT a match even if it says "part ${want}".\n` +
   `A reel posted soon after (minutes or hours) with nearly the same title about the same specific thing (same quiz, game, trip, place, person or story), ` +
   `or framed as the next level/round/day/update/result, is usually the continuation even without a label. ` +
-  `Same general theme but a different specific place, person or story is NOT a continuation.\n` +
+  `Same general theme but a different specific place, person or story is NOT a continuation. ` +
+  `Many creators post a recurring format (storytime, GRWM, "what would you do?", daily vlog, reaction): a new episode of the format about a different incident is NOT part 2. ` +
+  `Only pick a reel that continues the SAME incident/story/challenge. If unsure, return no matches.\n` +
   `Creators sometimes post parts out of order, so if a candidate explicitly shows or says "part ${want}" (cover, on-screen text or audio), that one wins over dates.\n` +
   `Reply ONLY with JSON: {"labeled": <candidate number explicitly marked part ${want}, or null>, "matches": [<candidate numbers that continue it, or empty>], "confidence": <0-1>, "reason": "<short>"}`;
 
