@@ -23,13 +23,13 @@ export async function GET(request) {
   // ?alias=u1,u2,u3 : several creators in ONE request via field aliases
   if (p.get("alias")) {
     const users = p.get("alias").split(",");
-    const f = users.map((x, i) => `business_discovery.username(${x}).as(c${i}){username,media.limit(${p.get("lim") || 25}){caption,timestamp,permalink,media_type,media_url,thumbnail_url}}`).join(",");
+    const f = users.map((x, i) => `business_discovery.username(${x}).as(${p.get("pre") || "creator"}${"abcdefghij"[i]}){username,media.limit(${p.get("lim") || 25}){caption,timestamp,permalink,media_type,media_url,thumbnail_url}}`).join(",");
     const t0 = Date.now();
     const r = await fetch(`${G}/${IG_BUSINESS_ID}?fields=${q(f)}&${t}`);
     const b = await r.json();
     const before = p.get("u0");
     return Response.json({ ms: Date.now() - t0, usage: r.headers.get("x-app-usage"), error: b.error,
-      got: Object.fromEntries(Object.entries(b).filter(([k]) => k.startsWith("c")).map(([k, v]) => [k, { user: v.username, posts: v.media?.data?.length }])) });
+      got: Object.fromEntries(Object.entries(b).filter(([k]) => k !== "id").map(([k, v]) => [k, { user: v.username, posts: v.media?.data?.length }])) });
   }
   // ?cost=light|heavy&u=<user>&n=5 : compare Meta usage of lightweight vs full lookups
   if (p.get("cost")) {
