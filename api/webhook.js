@@ -472,7 +472,8 @@ async function askGemini(sent, candidates, want) {
     parts.push({ text: `CANDIDATE ${i + 1} (posted ${date}). Caption: ${JSON.stringify(c.caption.slice(0, 300))}` });
     if (candImgs[i]) parts.push(candImgs[i]);
   });
-  return pickEarliest(await callGemini(parts), candidates, "covers");
+  // ~20 cover images take the full model a while; a short timeout pushed us onto the weaker "lite" model
+  return pickEarliest(await callGemini(parts, 45000), candidates, "covers");
 }
 
 // Download a video and upload it to Gemini's Files API (inline requests cap at ~20MB; reels are ~8-11MB each)
