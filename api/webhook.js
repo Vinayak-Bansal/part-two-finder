@@ -528,7 +528,7 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
   const templated = sameCaption >= 3;
   if (templated) trace.push(`templated caption (${sameCaption} posts share it)`);
   const isCopy = p => !templated && sentRaw.length >= 15 && norm(p.raw ?? p.caption) === sentRaw;
-  const candidates = posts.filter(p => p.shortcode !== code && p.takenAt > after && !isCopy(p));
+  const candidates = posts.filter(p => p.shortcode !== code && p.takenAt > after && !isCopy(p) && !info.exclude?.includes(p.shortcode));
   trace.push(`${posts.length} posts, ${candidates.length} after sent reel, original ${original ? "found" : "missing"}${original?.video ? " +video" : ""}`);
   if (!candidates.length) return { reason: "not_out" };
 

@@ -5,12 +5,12 @@ import { getCreator, findPartTwo, getRecentPosts, buildReply, redis, handleReel,
 const { VERIFY_TOKEN } = process.env;
 const code = u => u?.match(/\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/)?.[1] || null;
 
-async function runCase(reel, expected, blind) {
+async function runCase(reel, expected, blind, exclude) {
   const t0 = Date.now();
   try {
     const info = await getCreator(reel);
     if (!info?.username) return { reel, expected, got: null, reason: "no_creator", ms: Date.now() - t0 };
-    const { post, reason, trace } = await findPartTwo({ url: reel, title: "" }, { ...info, blind });
+    const { post, reason, trace } = await findPartTwo({ url: reel, title: "" }, { ...info, blind, exclude });
     return { reel, creator: info.username, expected, got: post?.shortcode || null, reason: reason || null, ms: Date.now() - t0, trace };
   } catch (e) {
     return { reel, expected, got: null, reason: "error: " + e.message, ms: Date.now() - t0 };
@@ -67,7 +67,7 @@ export async function GET(request) {
   const results = [];
   const par = Number(p.get("par") || 3);
   for (let i = 0; i < cases.length; i += par) {
-    results.push(...(await Promise.all(cases.slice(i, i + par).map(c => runCase(c.reel, c.expected, blind)))));
+    results.push(...(await Promise.all(cases.slice(i, i + par).map(c => runCase(c.reel, c.expected, blind, (p.get("exclude") || "").split(",").filter(Boolean))))));
   }
   // Infrastructure failures (rate limit, no data) aren't scored either way
   const INVALID = ["busy", "no_posts", "no_creator"];
