@@ -104,6 +104,38 @@ export async function drainPending(max) {
   }
 }
 
+// ---------- Instagram token renewal ----------
+// Instagram login tokens last 60 days. A daily job (api/cron.js) renews it weekly and keeps the
+// newest one in the database; the bot always uses the newest. Falls back to the Vercel setting.
+let igTokenCache = null;
+export async function igToken() {
+  if (igTokenCache && Date.now() - igTokenCache.at < 10 * 60e3) return igTokenCache.token;
+  const saved = await getJSON("ig_token");
+  const token = saved?.token || IG_TOKEN;
+  igTokenCache = { token, at: Date.now() };
+  return token;
+}
+
+export async function renewIgToken(force = false) {
+  const saved = await getJSON("ig_token");
+  if (!force && saved?.renewedAt && Date.now() - saved.renewedAt < 7 * 864e5) {
+    return { skipped: true, daysLeft: Math.round((saved.expiresAt - Date.now()) / 864e5) };
+  }
+  const current = saved?.token || IG_TOKEN;
+  const res = await fetch(`https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=${current}`);
+  const body = await res.json();
+  if (!body.access_token) {
+    console.error("IG TOKEN RENEWAL FAILED:", JSON.stringify(body).slice(0, 300));
+    return { ok: false, error: body.error?.message || "unknown" };
+  }
+  const value = { token: body.access_token, renewedAt: Date.now(), expiresAt: Date.now() + body.expires_in * 1000 };
+  // Keep it well past expiry; the bot overwrites it every week
+  await setJSON("ig_token", value, 120 * 86400);
+  igTokenCache = null;
+  console.log("Instagram token renewed, valid for", Math.round(body.expires_in / 86400), "days");
+  return { ok: true, daysLeft: Math.round(body.expires_in / 86400) };
+}
+
 // Test-only switches (used by /api/test to simulate a busy period without sending real DMs)
 export const testHooks = { forceBusy: 0, waits: null, sent: null };
 
@@ -841,7 +873,7 @@ async function sendText(recipientId, text) {
   if (String(recipientId).startsWith("TEST")) { testHooks.sent?.push({ to: recipientId, text }); return; }
   const res = await fetch(`${GRAPH}/me/messages`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${IG_TOKEN}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${await igToken()}`, "Content-Type": "application/json" },
     body: JSON.stringify({ recipient: { id: recipientId }, message: { text } }),
   });
   if (!res.ok) console.error("Send failed:", res.status, await res.text());

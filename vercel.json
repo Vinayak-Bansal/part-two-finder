@@ -1,5 +1,8 @@
 {
   "functions": {
     "api/*.js": { "maxDuration": 300 }
-  }
+  },
+  "crons": [
+    { "path": "/api/cron", "schedule": "17 14 * * *" }
+  ]
 }
