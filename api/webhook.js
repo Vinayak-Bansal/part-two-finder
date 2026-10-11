@@ -600,7 +600,7 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
     .sort((a, b) => b.sim - a.sim);
   const bySim = simRanked.slice(0, 10).map(x => x.c);
   const topSim = simRanked.filter(x => x.sim >= 0.15).slice(0, 3).map(x => x.c);
-  const ordered = [...new Set([...labeled, ...bySim, ...candidates])].slice(0, 20);
+  const ordered = [...new Set([...labeled, ...bySim, ...candidates])].slice(0, COVERS_MAX);
   // Captions like "Man" / "Smh" carry no info → go straight to watching the videos
   const vagueCaption = words(caption).size < 4 || templated;
   let ai = null;
@@ -721,7 +721,8 @@ function pickEarliest(out, candidates, label) {
   return nums.map(i => candidates[i - 1]).sort((a, b) => a.takenAt - b.takenAt)[0];
 }
 
-// Pass 1: covers + captions (fast)
+// Pass 1: covers + captions (fast). Low-res covers are cheap, so the AI can see up to 40 reels
+const COVERS_MAX = 40;
 const ago = ms => ms < 3600e3 ? `${Math.max(1, Math.round(ms / 60e3))} min` : ms < 48 * 3600e3 ? `${Math.round(ms / 3600e3)} h` : `${Math.round(ms / 864e5)} days`;
 
 async function askGemini(sent, candidates, want) {
@@ -738,7 +739,7 @@ async function askGemini(sent, candidates, want) {
     if (candImgs[i]) parts.push(candImgs[i]);
   });
   // ~20 cover images take the full model a while; a short timeout pushed us onto the weaker "lite" model
-  return pickEarliest(await callGemini(parts, 45000), candidates, "covers");
+  return pickEarliest(await callGemini(parts, 45000, { mediaResolution: "MEDIA_RESOLUTION_LOW" }), candidates, "covers");
 }
 
 // Download a video and upload it to Gemini's Files API (inline requests cap at ~20MB; reels are ~8-11MB each)
