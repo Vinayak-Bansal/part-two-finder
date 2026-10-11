@@ -491,6 +491,23 @@ export function creatorSimilarity(posts) {
   };
 }
 
+// Hashtag-only similarity, weighted by how rare each tag is for this creator (#tech on every post ≈ 0, #tesla on a few = strong)
+function tagSet(text) {
+  return new Set((text.toLowerCase().match(/#[\p{L}\p{N}_]+/gu) || []).map(t => t.slice(1)));
+}
+export function creatorTagSimilarity(posts) {
+  const df = new Map();
+  for (const p of posts) for (const t of tagSet(p.caption)) df.set(t, (df.get(t) || 0) + 1);
+  const N = Math.max(posts.length, 1);
+  const idf = t => Math.max(0, Math.log((N + 1) / ((df.get(t) || 0) + 0.5)) - 1);
+  return (a, b) => {
+    const A = tagSet(a), B = tagSet(b);
+    let hit = 0, sa = 0;
+    for (const t of A) { sa += idf(t); if (B.has(t)) hit += idf(t); }
+    return sa ? hit / sa : 0;
+  };
+}
+
 export async function findPartTwo(payload, info, onSlow) {
   const trace = [];
   const r = await findPartTwoInner(payload, info, onSlow, trace);
@@ -576,9 +593,13 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
   if (!GEMINI_API_KEY) return { reason: "no_match" };
   await onSlow?.();
   // Order for the AI: part-labeled first, then the most similar captions, then nearest in time
-  const bySim = candidates.filter(c => !labeled.includes(c))
-    .map(c => ({ c, sim: wsim(caption, c.caption) }))
-    .sort((a, b) => b.sim - a.sim).slice(0, 10).map(x => x.c);
+  // Caption words first, plus rare shared hashtags (a follow-up months later may share only "#tesla", not words)
+  const tsim = creatorTagSimilarity(posts);
+  const simRanked = candidates.filter(c => !labeled.includes(c))
+    .map(c => ({ c, sim: wsim(caption, c.caption) + 0.5 * tsim(caption, c.caption) }))
+    .sort((a, b) => b.sim - a.sim);
+  const bySim = simRanked.slice(0, 10).map(x => x.c);
+  const topSim = simRanked.filter(x => x.sim >= 0.15).slice(0, 3).map(x => x.c);
   const ordered = [...new Set([...labeled, ...bySim, ...candidates])].slice(0, 20);
   // Captions like "Man" / "Smh" carry no info → go straight to watching the videos
   const vagueCaption = words(caption).size < 4 || templated;
@@ -595,7 +616,7 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
     const nearest = [...candidates].sort((a, b) => a.takenAt - b.takenAt);
     const withVid = candidates.filter(c => c.video).length;
     console.log(`Video pass pool: ${withVid}/${candidates.length} candidates have a video URL; sent reel video: ${!!original.video}`);
-    const pool = [...new Set([...labeled, ...nearest])].filter(c => c.video).slice(0, 6);
+    const pool = [...new Set([...labeled, ...topSim, ...nearest])].filter(c => c.video).slice(0, 6);
     const vid = await askGeminiVideo({ caption, video: original.video, takenAt: after }, pool, want);
     trace.push(`video(${pool.length}): ${vid === "down" ? "down" : vid?.shortcode || "none"}`);
     if (vid && vid !== "down") return { post: preferEarlier(vid, candidates, caption) };
