@@ -137,7 +137,7 @@ export async function renewIgToken(force = false) {
 }
 
 // Test-only switches (used by /api/test to simulate a busy period without sending real DMs)
-export const testHooks = { forceBusy: 0, waits: null, sent: null };
+export const testHooks = { forceBusy: 0, waits: null, sent: null, coversHires: false };
 
 // The reply for a shared reel (exported so the test endpoint can check the exact DM text)
 // How long to remember each kind of answer (seconds). Unsure answers aren't remembered long,
@@ -600,7 +600,7 @@ async function findPartTwoInner(payload, info, onSlow, trace) {
     .sort((a, b) => b.sim - a.sim);
   const bySim = simRanked.slice(0, 10).map(x => x.c);
   const topSim = simRanked.filter(x => x.sim >= 0.15).slice(0, 3).map(x => x.c);
-  const ordered = [...new Set([...labeled, ...bySim, ...candidates])].slice(0, COVERS_MAX);
+  const ordered = [...new Set([...labeled, ...bySim, ...candidates])].slice(0, testHooks.coversHires ? 20 : COVERS_MAX);
   // Captions like "Man" / "Smh" carry no info → go straight to watching the videos
   const vagueCaption = words(caption).size < 4 || templated;
   let ai = null;
@@ -739,7 +739,7 @@ async function askGemini(sent, candidates, want) {
     if (candImgs[i]) parts.push(candImgs[i]);
   });
   // ~20 cover images take the full model a while; a short timeout pushed us onto the weaker "lite" model
-  return pickEarliest(await callGemini(parts, 45000, { mediaResolution: "MEDIA_RESOLUTION_LOW" }), candidates, "covers");
+  return pickEarliest(await callGemini(parts, 45000, testHooks.coversHires ? null : { mediaResolution: "MEDIA_RESOLUTION_LOW" }), candidates, "covers");
 }
 
 // Download a video and upload it to Gemini's Files API (inline requests cap at ~20MB; reels are ~8-11MB each)

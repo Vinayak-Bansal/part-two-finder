@@ -21,6 +21,7 @@ export async function GET(request) {
   const p = new URL(request.url).searchParams;
   if (![VERIFY_TOKEN, process.env.TEST_KEY].filter(Boolean).includes(p.get("key"))) return new Response("Forbidden", { status: 403 });
   const blind = p.get("blind") === "1";
+  testHooks.coversHires = p.get("hires") === "1"; // A/B: old covers check (20 covers, normal resolution)
   // ?simbusy=<shortcode>&times=N : pretend Meta is busy for the first N attempts and show the DMs the
   // person would get (sent to a fake TEST id, nothing really sent). times>=3 also tests parking + draining.
   if (p.get("simbusy")) {
