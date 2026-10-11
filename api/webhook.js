@@ -721,11 +721,17 @@ function pickEarliest(out, candidates, label) {
   return nums.map(i => candidates[i - 1]).sort((a, b) => a.takenAt - b.takenAt)[0];
 }
 
-// Pass 1: covers + captions (fast). Low-res covers are cheap, so the AI can see up to 40 reels
+// Pass 1: covers + captions (fast). The 20 most likely reels at full resolution (small "Part 2" text stays readable);
+// if none match and there are more, the next 20 at low resolution (cheap) so a far-away part 2 still gets a look.
 const COVERS_MAX = 40;
+async function askGemini(sent, candidates, want) {
+  const first = await askGeminiOnce(sent, candidates.slice(0, 20), want, false);
+  if (first || candidates.length <= 20 || testHooks.coversHires) return first;
+  return askGeminiOnce(sent, candidates.slice(20, COVERS_MAX), want, true);
+}
 const ago = ms => ms < 3600e3 ? `${Math.max(1, Math.round(ms / 60e3))} min` : ms < 48 * 3600e3 ? `${Math.round(ms / 3600e3)} h` : `${Math.round(ms / 864e5)} days`;
 
-async function askGemini(sent, candidates, want) {
+async function askGeminiOnce(sent, candidates, want, low) {
   const [sentImg, ...candImgs] = await Promise.all([sent.thumb, ...candidates.map(c => c.thumb)].map(imagePart));
   const parts = [
     { text: `You help people find the next part of an Instagram reel series.\nThe user sent a reel. Below are reels the same creator posted AFTER it (cover image + caption).\n` + RULES(want) },
@@ -739,7 +745,7 @@ async function askGemini(sent, candidates, want) {
     if (candImgs[i]) parts.push(candImgs[i]);
   });
   // ~20 cover images take the full model a while; a short timeout pushed us onto the weaker "lite" model
-  return pickEarliest(await callGemini(parts, 45000, testHooks.coversHires ? null : { mediaResolution: "MEDIA_RESOLUTION_LOW" }), candidates, "covers");
+  return pickEarliest(await callGemini(parts, 45000, low ? { mediaResolution: "MEDIA_RESOLUTION_LOW" } : null), candidates, low ? "covers, extra low-res" : "covers");
 }
 
 // Download a video and upload it to Gemini's Files API (inline requests cap at ~20MB; reels are ~8-11MB each)
